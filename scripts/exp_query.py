@@ -1,11 +1,11 @@
 """
-Expérience 2 — Text-to-Graph Query (WebQuestionsSP style).
+实验 2：文本到图查询（WebQuestionsSP 风格）。
 
-Le modèle reçoit une question en langage naturel et doit produire :
-  1. Une réponse factuelle courte.
-  2. (Optionnel) une requête Cypher correspondante.
+模型接收自然语言问题，并输出：
+  1. 简短的事实答案。
+  2. 可选的对应 Cypher 查询。
 
-On mesure l'Accuracy (correspondance exacte / inclusion de la réponse).
+评估答案的准确率（完全匹配或子串匹配）。
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ _NUM_RE = re.compile(r"[\d]+(?:[.,]\d+)?")
 
 
 def _extract_number(s: str) -> float | None:
-    """Extraire la première valeur numérique d'une chaîne."""
+    """从字符串中提取第一个数值。"""
     m = _NUM_RE.search(s.replace("\u202f", "").replace(" ", ""))
     if m:
         return float(m.group().replace(",", "."))
@@ -45,11 +45,11 @@ def _extract_number(s: str) -> float | None:
 
 
 def _answer_match(pred_answer: str, gold_answer: str) -> bool:
-    """Match souple : inclusion bi-directionnelle + tolérance numérique ±10 %."""
+    """宽松匹配：双向子串匹配，数值允许 ±10% 的误差。"""
     p, g = _normalize(pred_answer), _normalize(gold_answer)
     if p in g or g in p or p == g:
         return True
-    # Tolérance numérique
+    # 数值容差
     pn, gn = _extract_number(p), _extract_number(g)
     if pn is not None and gn is not None and gn != 0:
         return abs(pn - gn) / abs(gn) <= 0.10
@@ -57,21 +57,21 @@ def _answer_match(pred_answer: str, gold_answer: str) -> bool:
 
 
 def _strip_markdown(raw: str) -> str:
-    """Retire les blocs ```json...``` ou ```...``` qui entourent la réponse."""
+    """移除回答外层的 ```json...``` 或 ```...``` 代码块。"""
     m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw, re.DOTALL)
     return m.group(1).strip() if m else raw
 
 
 def _parse_response(raw: str) -> dict | None:
     cleaned = _strip_markdown(raw)
-    # Tenter json.loads sur la chaîne entière d'abord (gère les accolades imbriquées)
+    # 优先解析完整字符串，以处理嵌套花括号
     try:
         obj = json.loads(cleaned)
         if isinstance(obj, dict) and "answer" in obj:
             return obj
     except (json.JSONDecodeError, ValueError):
         pass
-    # Fallback regex : trouver le bloc JSON le plus externe
+    # 解析失败时用正则查找最外层 JSON 块
     depth = 0
     start = None
     for i, c in enumerate(cleaned):
@@ -89,17 +89,17 @@ def _parse_response(raw: str) -> dict | None:
                 except (json.JSONDecodeError, ValueError):
                     pass
                 start = None
-    # Fallback : toute la réponse est la answer
+    # 最后将整个回答视为答案
     return {"answer": cleaned.strip(), "cypher": ""}
 
 
-# ── Point d'entrée ─────────────────────────────────────────────────────────
+# ── 程序入口 ────────────────────────────────────────────────────────────
 
 def run(n_samples: int | None = None) -> dict[str, Any]:
     data = load_query_data(n_samples) if n_samples else load_query_data()
     logger.info("=== Exp 2 : Text-to-Query — %d échantillons ===", len(data))
 
-    # ── Reprise depuis checkpoint ──────────────────────────────────────
+    # ── 从检查点继续 ────────────────────────────────────────────────
     ckpt = load_checkpoint("query")
     if ckpt:
         start_idx = ckpt["next_idx"]
@@ -124,7 +124,7 @@ def run(n_samples: int | None = None) -> dict[str, Any]:
 
         ans_ok = _answer_match(pred["answer"], sample["answer"]) if pred else False
 
-        # Vérification syntaxique basique du Cypher
+        # 简单检查 Cypher 语法
         cypher_ok = False
         if pred and pred.get("cypher"):
             cypher_upper = pred["cypher"].upper()
@@ -156,7 +156,7 @@ def run(n_samples: int | None = None) -> dict[str, Any]:
     accuracy = correct / len(data) if data else 0.0
     cypher_rate = cypher_valid / len(data) if data else 0.0
 
-    # Bootstrap CI sur accuracy
+    # 计算准确率的 Bootstrap 置信区间
     per_sample_correct = [
         1.0 if d.get("answer_correct") else 0.0 for d in details
     ]

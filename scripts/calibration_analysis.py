@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Suggestion E — Calibration de la confiance auto-rapportée.
+建议 E：校准模型自行报告的置信度。
 
-Analyse les scores de confiance dans les résultats d'extraction pour :
-1. Tracer le diagramme de fiabilité (reliability diagram)
-2. Calculer l'Expected Calibration Error (ECE)
-3. Appliquer la calibration isotonique
-4. Déterminer le seuil optimal de rejet
+分析关系抽取结果中的置信度，用于：
+1. 绘制可靠性图
+2. 计算期望校准误差（ECE）
+3. 执行等距回归校准
+4. 确定最佳拒绝阈值
 
-Usage :
+用法：
     python calibration_analysis.py [--results path/to/extraction_qlora.json]
 """
 from __future__ import annotations
@@ -30,7 +30,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 def load_confidence_data(results_path: str) -> tuple[np.ndarray, np.ndarray]:
-    """Charge les (confidence, correct) depuis un fichier de résultats d'extraction."""
+    """从关系抽取结果文件中加载（置信度、是否正确）数据。"""
     with open(results_path) as f:
         data = json.load(f)
 
@@ -57,14 +57,14 @@ def load_confidence_data(results_path: str) -> tuple[np.ndarray, np.ndarray]:
 
 
 def compute_ece(confidences: np.ndarray, corrects: np.ndarray, n_bins: int = 10) -> dict:
-    """Calcule l'Expected Calibration Error et les données par bin."""
+    """计算期望校准误差和各分箱的数据。"""
     bin_edges = np.linspace(0, 1, n_bins + 1)
     bins = []
 
     for i in range(n_bins):
         lo, hi = bin_edges[i], bin_edges[i + 1]
         mask = (confidences >= lo) & (confidences < hi)
-        if i == n_bins - 1:  # dernier bin inclut la borne sup
+        if i == n_bins - 1:  # 最后一个分箱包含上界
             mask = (confidences >= lo) & (confidences <= hi)
 
         count = mask.sum()
@@ -85,13 +85,13 @@ def compute_ece(confidences: np.ndarray, corrects: np.ndarray, n_bins: int = 10)
             "gap": round(float(abs(avg_conf - avg_acc)), 4),
         })
 
-    # ECE pondéré par le nombre d'échantillons
+    # 按各分箱样本数加权计算 ECE
     ece = sum(b["count"] * b["gap"] for b in bins) / len(confidences) if len(confidences) > 0 else 0
     return {"ece": round(ece, 4), "n_bins": n_bins, "bins": bins}
 
 
 def compute_auc_confidence(confidences: np.ndarray, corrects: np.ndarray) -> float:
-    """AUC-ROC du score de confiance comme prédicteur de correction."""
+    """将置信度用于预测正确性，计算 AUC-ROC。"""
     from sklearn.metrics import roc_auc_score
     if len(np.unique(corrects)) < 2:
         return float("nan")
@@ -99,7 +99,7 @@ def compute_auc_confidence(confidences: np.ndarray, corrects: np.ndarray) -> flo
 
 
 def find_optimal_threshold(confidences: np.ndarray, corrects: np.ndarray) -> dict:
-    """Trouve le seuil de confiance qui maximise F1 (rejet sous le seuil)."""
+    """找出使 F1 最大的置信度阈值；低于阈值的预测被拒绝。"""
     thresholds = np.arange(0.0, 1.01, 0.01)
     best = {"threshold": 0, "f1": 0, "precision": 0, "recall": 0, "n_kept": len(corrects)}
 
@@ -111,7 +111,7 @@ def find_optimal_threshold(confidences: np.ndarray, corrects: np.ndarray) -> dic
 
         tp = corrects[mask].sum()
         fp = n_kept - tp
-        fn = corrects[~mask].sum()  # vrais positifs rejetés à tort
+        fn = corrects[~mask].sum()  # 被错误拒绝的正确预测
 
         prec = tp / (tp + fp) if (tp + fp) > 0 else 0
         rec = tp / (tp + fn) if (tp + fn) > 0 else 0
@@ -132,7 +132,7 @@ def find_optimal_threshold(confidences: np.ndarray, corrects: np.ndarray) -> dic
 
 
 def isotonic_calibration(confidences: np.ndarray, corrects: np.ndarray) -> dict:
-    """Calibration isotonique (train/test split 70/30)."""
+    """执行等距回归校准，训练集和测试集按 70/30 划分。"""
     from sklearn.isotonic import IsotonicRegression
     from sklearn.model_selection import train_test_split
 
@@ -147,7 +147,7 @@ def isotonic_calibration(confidences: np.ndarray, corrects: np.ndarray) -> dict:
 
     cal_test = iso.predict(conf_test)
 
-    # ECE avant et après calibration
+    # 比较校准前后的 ECE
     ece_before = compute_ece(conf_test, corr_test)["ece"]
     ece_after = compute_ece(cal_test, corr_test)["ece"]
 
@@ -162,7 +162,7 @@ def isotonic_calibration(confidences: np.ndarray, corrects: np.ndarray) -> dict:
 
 def plot_reliability_diagram(confidences: np.ndarray, corrects: np.ndarray,
                              ece_data: dict, label: str = "extraction"):
-    """Trace le diagramme de fiabilité."""
+    """绘制可靠性图。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -178,7 +178,7 @@ def plot_reliability_diagram(confidences: np.ndarray, corrects: np.ndarray,
                                     gridspec_kw={"height_ratios": [3, 1]},
                                     sharex=True)
 
-    # Reliability diagram
+    # 可靠性图
     ax1.bar(confs, accs, width=0.08, alpha=0.6, color="#2196F3", label="Accuracy réelle")
     ax1.plot([0, 1], [0, 1], "k--", linewidth=1, label="Calibration parfaite")
     ax1.set_ylabel("Accuracy réelle", fontsize=12)
@@ -189,7 +189,7 @@ def plot_reliability_diagram(confidences: np.ndarray, corrects: np.ndarray,
     ax1.set_ylim(-0.05, 1.05)
     ax1.grid(True, alpha=0.3)
 
-    # Histogramme des confiances
+    # 置信度直方图
     ax2.bar(confs, counts, width=0.08, alpha=0.6, color="#FF9800")
     ax2.set_xlabel("Confiance prédite", fontsize=12)
     ax2.set_ylabel("Nombre", fontsize=12)
@@ -203,7 +203,7 @@ def plot_reliability_diagram(confidences: np.ndarray, corrects: np.ndarray,
 
 
 def plot_rejection_curve(confidences: np.ndarray, corrects: np.ndarray, label: str = "extraction"):
-    """Trace F1 et Precision en fonction du seuil de rejet."""
+    """绘制 F1 和精确率随拒绝阈值变化的曲线。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -211,7 +211,7 @@ def plot_rejection_curve(confidences: np.ndarray, corrects: np.ndarray, label: s
     thresholds = np.arange(0.0, 1.01, 0.02)
     f1s, precs, recs, kept_pcts = [], [], [], []
 
-    baseline_f1 = corrects.mean()  # Approx F1 sans rejet
+    baseline_f1 = corrects.mean()  # 估算不拒绝预测时的 F1
 
     for tau in thresholds:
         mask = confidences >= tau
@@ -259,7 +259,7 @@ def plot_rejection_curve(confidences: np.ndarray, corrects: np.ndarray, label: s
 
 
 def analyze(results_path: str, label: str = "extraction") -> dict:
-    """Analyse complète de calibration."""
+    """执行完整的置信度校准分析。"""
     confidences, corrects = load_confidence_data(results_path)
 
     if len(confidences) < 10:
@@ -278,21 +278,21 @@ def analyze(results_path: str, label: str = "extraction") -> dict:
     auc = compute_auc_confidence(confidences, corrects)
     logger.info("AUC-ROC (confiance→correctness) = %.4f", auc)
 
-    # 3. Seuil optimal
+    # 3. 最佳阈值
     opt = find_optimal_threshold(confidences, corrects)
     logger.info("Seuil optimal τ=%.2f → F1=%.4f (rejet %.1f%%)",
                 opt["threshold"], opt["f1"], opt["rejection_rate"] * 100)
 
-    # 4. Calibration isotonique
+    # 4. 等距回归校准
     iso = isotonic_calibration(confidences, corrects)
     logger.info("Calibration isotonique : ECE %.4f → %.4f (réduction %.4f)",
                 iso["ece_before"], iso["ece_after"], iso["ece_reduction"])
 
-    # 5. Figures
+    # 5. 绘图
     fig_reliability = plot_reliability_diagram(confidences, corrects, ece_data, label)
     fig_rejection = plot_rejection_curve(confidences, corrects, label)
 
-    # Résultat complet
+    # 完整结果
     result = {
         "label": label,
         "n_samples": len(confidences),
@@ -310,7 +310,7 @@ def analyze(results_path: str, label: str = "extraction") -> dict:
         "figures": [fig_reliability, fig_rejection],
     }
 
-    # Sauvegarder
+    # 保存
     out_path = os.path.join(OUTPUT_DIR, f"calibration_{label}.json")
     with open(out_path, "w") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
@@ -327,7 +327,7 @@ def main():
     args = parser.parse_args()
 
     if args.results is None:
-        # Chercher le résultat le plus récent
+        # 查找最新的结果
         candidates = [
             os.path.join(RESULTS_DIR, "extraction_qlora.json"),
             os.path.join(RESULTS_DIR, "extraction.json"),

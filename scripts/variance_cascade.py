@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Variance inter-runs de la cascade V5b (Phi-4 → GPT-OSS, k=5).
+级联流程 V5b 的多次运行方差（Phi-4 → GPT-OSS，k=5）。
 
-Lance R exécutions indépendantes de la cascade complète (500 questions)
-et mesure la variance de l'EM, F1, Oracle et taux de reroutage.
+对完整级联流程（500 道题）独立运行 R 次，
+测量完全匹配率、F1、Oracle 指标和重新路由比例的方差。
 
-Usage :
+用法：
     python variance_cascade.py --runs 3
 """
 from __future__ import annotations
@@ -48,11 +48,11 @@ def run_path(run_id: int):
 
 
 def run_cascade(data, run_id: int) -> dict:
-    """Run one cascade, saving under a run-specific filename."""
+    """运行一次级联实验，并以本次运行专用的文件名保存。"""
     canon = canonical_path()
     rp = run_path(run_id)
 
-    # If this run is already complete, load and return
+    # 如果本次运行已经完成，直接加载并返回结果
     if os.path.exists(rp):
         with open(rp) as f:
             existing = json.load(f)
@@ -60,13 +60,13 @@ def run_cascade(data, run_id: int) -> dict:
             print(f"\n  [SKIP] run {run_id} already complete ({rp})")
             return existing
 
-    # Move any existing canonical checkpoint out of the way
+    # 暂时移开已有的通用检查点
     canon_backup = None
     if os.path.exists(canon):
         canon_backup = canon + f".bak_variance"
         shutil.move(canon, canon_backup)
 
-    # If there's a partial run file, copy it to the canonical path
+    # 如果存在本次运行的部分结果，将其复制到通用检查点路径
     if os.path.exists(rp):
         shutil.copy2(rp, canon)
 
@@ -78,11 +78,11 @@ def run_cascade(data, run_id: int) -> dict:
             threshold_low=THRESHOLD_LOW,
         )
     finally:
-        # Save the result as the run-specific file
+        # 以本次运行专用的文件名保存结果
         if os.path.exists(canon):
             shutil.copy2(canon, rp)
             os.remove(canon)
-        # Restore the original canonical file if it existed
+        # 如果原先存在通用检查点，将其恢复
         if canon_backup and os.path.exists(canon_backup):
             shutil.move(canon_backup, canon)
 
@@ -90,7 +90,7 @@ def run_cascade(data, run_id: int) -> dict:
 
 
 def compile_variance(runs_data: list[dict]) -> dict:
-    """Compile variance statistics across R runs."""
+    """汇总 R 次运行的方差统计。"""
     R = len(runs_data)
     ems = [r["em_voted"] for r in runs_data]
     f1s = [r["f1_voted"] for r in runs_data]
@@ -165,7 +165,7 @@ def main():
     print(f"Questions multi-hop : {len(data)}")
     print(f"Runs planifiés : {args.start_run} → {args.runs - 1}")
 
-    # The existing cascade run is run0
+    # 将已有的级联结果视为第零次运行
     canon = canonical_path()
     rp0 = run_path(0)
     if os.path.exists(canon) and not os.path.exists(rp0):
@@ -179,7 +179,7 @@ def main():
         print(f"{'#'*70}")
 
         if run_id < args.start_run:
-            # Load existing
+            # 加载已有结果
             rp = run_path(run_id)
             if os.path.exists(rp):
                 with open(rp) as f:

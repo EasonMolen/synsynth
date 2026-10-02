@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 """
-V5a — Self-consistency intégrée au pipeline multi-hop.
+V5a：将自一致性方法集成到多跳推理流程。
 
-Au lieu d'un seul appel à T≈0.1, génère k réponses à T>0 puis
-vote majoritaire. Compare avec le pipeline V4 (single-shot).
+在温度 T>0 时生成 k 个答案并进行多数投票，
+再与 V4 的单次调用流程（T≈0.1）比较。
 
-Modes :
-  - SC simple (vote majoritaire, k=3 ou k=5)
-  - SC + routage par confiance d'accord (V5b preview)
+模式：
+  - 基础自一致性：k=3 或 k=5 的多数投票。
+  - 自一致性加基于一致程度的路由（V5b 预览版）。
 
-Usage :
-    # Évaluation SC k=3 sur les 500 questions du pipeline
+用法：
+    # 对流程中的 500 道题进行 k=3 的自一致性评估
     python scripts/pipeline_self_consistency.py
 
-    # k=5, un seul modèle
+    # k=5，单个模型
     python scripts/pipeline_self_consistency.py --k 5 --model phi4:latest
 
-    # Comparer 3 modèles
+    # 比较三个模型
     python scripts/pipeline_self_consistency.py --models phi4:latest gpt-oss:20b phi4-reasoning:plus
 
-    # Mode cascade (V5b) : routage par confiance d'accord
+    # 级联模式（V5b）：按答案一致程度路由
     python scripts/pipeline_self_consistency.py --cascade --k 5
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ from synsynth_data import load_multihop_data
 from synsynth_stats import bootstrap_ci, token_f1
 from synsynth_checkpoint import save_checkpoint, load_checkpoint, clear_checkpoint
 
-# ── Ollama direct (pas via synsynth_model pour contrôler T) ────────────────
+# ── 直接调用 Ollama，以便控制温度 T ───────────────────────────────────
 import urllib.request
 import urllib.error
 
@@ -71,11 +71,11 @@ SYSTEM_PROMPT = (
     "sans texte avant ni après."
 )
 
-# ── Pipeline defaults ──────────────────────────────────────────────────────
-DEFAULT_MODEL = "phi4:latest"       # meilleur multi-hop du pipeline V4
+# ── 流程默认参数 ────────────────────────────────────────────────────────
+DEFAULT_MODEL = "phi4:latest"       # V4 流程中表现最好的多跳推理模型
 CASCADE_MODELS = [
-    "phi4:latest",              # primary (meilleur EM pipeline)
-    "gpt-oss:20b",             # fallback (meilleur SC, MoE complementaire)
+    "phi4:latest",              # 主模型，流程中的完全匹配率最高
+    "gpt-oss:20b",             # 备用模型，自一致性表现最佳的互补 MoE 模型
 ]
 DEFAULT_K = 3
 DEFAULT_TEMP = 0.7
@@ -83,7 +83,7 @@ DEFAULT_TEMP = 0.7
 RESULTS_SC_DIR = os.path.join(RESULTS_DIR, "pipeline_self_consistency")
 
 
-# ── Appel Ollama ────────────────────────────────────────────────────────────
+# ── 调用 Ollama ─────────────────────────────────────────────────────────
 
 def ollama_chat(model: str, messages: list[dict],
                 temperature: float = 0.7,
@@ -117,7 +117,7 @@ def ollama_chat(model: str, messages: list[dict],
         return ""
 
 
-# ── Parsing & Matching (identiques au pipeline) ───────────────────────────
+# ── 回答解析与匹配，与主流程一致 ──────────────────────────────────────
 
 def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip().lower())
@@ -189,7 +189,7 @@ def answer_match(pred: str, gold: str) -> bool:
     return False
 
 
-# ── Vote & accord ──────────────────────────────────────────────────────────
+# ── 投票与一致程度 ─────────────────────────────────────────────────────
 
 def majority_vote(answers: list[str]) -> str:
     if not answers:
@@ -211,14 +211,14 @@ def vote_agreement(answers: list[str]) -> float:
     return sum(1 for n in normalized if n == winner) / len(normalized)
 
 
-# ── Baseline V4 (single-shot T≈0.1) ───────────────────────────────────────
+# ── V4 基线：温度约为 0.1 的单次调用 ─────────────────────────────────
 
 def load_v4_baseline() -> dict | None:
-    """Charge les résultats multihop V4 existants pour comparaison.
+    """加载已有的多跳推理 V4 结果用于比较。
 
-    Priorité : learning curve V4 point n_train le plus performant.
+    优先选择 V4 学习曲线中表现最好的训练样本数。
     """
-    # Learning curve V4 — prendre le meilleur EM
+    # 取 V4 学习曲线中的最高完全匹配率
     lc_path = os.path.join(RESULTS_DIR, "learning_curve",
                            "learning_curve_multihop_v4.json")
     if os.path.exists(lc_path):
@@ -228,7 +228,7 @@ def load_v4_baseline() -> dict | None:
             best = max(lc, key=lambda x: x.get("exact_accuracy", 0))
             return best
 
-    # Fallback : all_results.json
+    # 找不到时使用 all_results.json
     all_path = os.path.join(RESULTS_DIR, "all_results.json")
     if os.path.exists(all_path):
         with open(all_path) as f:
@@ -239,11 +239,11 @@ def load_v4_baseline() -> dict | None:
     return None
 
 
-# ── Évaluation SC sur le pipeline complet ──────────────────────────────────
+# ── 对完整流程进行自一致性评估 ────────────────────────────────────────
 
 def evaluate_pipeline_sc(model: str, data: list[dict],
                          k: int, temperature: float) -> dict:
-    """Évalue self-consistency sur toutes les questions du pipeline."""
+    """在流程中的全部问题上评估自一致性。"""
     safe = model.replace(":", "_").replace("/", "_")
     os.makedirs(RESULTS_SC_DIR, exist_ok=True)
     ckpt_path = os.path.join(RESULTS_SC_DIR, f"sc_{safe}_k{k}.json")
@@ -278,7 +278,7 @@ def evaluate_pipeline_sc(model: str, data: list[dict],
             {"role": "user", "content": prompt},
         ]
 
-        # k appels avec T > 0
+        # 在 T>0 时独立调用 k 次
         parsed_answers = []
         for ki in range(k):
             raw = ollama_chat(model, messages,
@@ -288,7 +288,7 @@ def evaluate_pipeline_sc(model: str, data: list[dict],
             ans = pred["answer"] if pred else ""
             parsed_answers.append(ans)
 
-        # Vote majoritaire
+        # 多数投票
         voted = majority_vote(parsed_answers)
         agreement = vote_agreement(parsed_answers)
         gold = sample["answer"]
@@ -297,8 +297,8 @@ def evaluate_pipeline_sc(model: str, data: list[dict],
         f1_voted = token_f1(voted, gold)
         individual_ems = [answer_match(a, gold) for a in parsed_answers]
 
-        # Comparaison single-shot T≈0.1 (le premier appel serait à T=0.7,
-        # pas directement comparable — on compare avec la baseline V4)
+        # 单次调用使用 T≈0.1，而这里的第一次调用使用 T=0.7；
+        # 因此与 V4 基线比较。
 
         details.append({
             "idx": i,
@@ -331,18 +331,18 @@ def evaluate_pipeline_sc(model: str, data: list[dict],
     return _compile(details, model, k, temperature)
 
 
-# ── Cascade V5b : routage par confiance d'accord ──────────────────────────
+# ── 级联 V5b：根据答案一致程度路由 ──────────────────────────────────
 
 def evaluate_pipeline_cascade(models: list[str], data: list[dict],
                               k: int, temperature: float,
                               threshold_high: float = 0.8,
                               threshold_low: float = 0.4) -> dict:
-    """Cascade : modèle primaire → si accord faible → modèle secondaire.
+    """级联流程：先用主模型，一致程度较低时再用次模型。
 
-    Stratégie inspirée du paradoxe de l'accord (D2) :
-    - accord ≥ threshold_high  → accepter le vote (zone de confiance)
-    - accord ∈ [threshold_low, threshold_high[ → re-router vers modèle 2
-    - accord < threshold_low   → flaguer incertain, tenter modèle 2 quand même
+    策略参考 D2 的一致性悖论：
+    - 一致度 ≥ threshold_high：接受投票结果。
+    - 一致度在 [threshold_low, threshold_high) 内：转到第二个模型。
+    - 一致度 < threshold_low：标记为不确定，仍尝试第二个模型。
     """
     if len(models) < 2:
         raise ValueError("La cascade nécessite au moins 2 modèles")
@@ -389,7 +389,7 @@ def evaluate_pipeline_cascade(models: list[str], data: list[dict],
         ]
         gold = sample["answer"]
 
-        # Phase 1 : modèle primaire, k échantillons
+        # 阶段 1：主模型生成 k 个答案
         primary_answers = []
         for ki in range(k):
             raw = ollama_chat(primary, messages,
@@ -400,7 +400,7 @@ def evaluate_pipeline_cascade(models: list[str], data: list[dict],
         primary_voted = majority_vote(primary_answers)
         primary_agreement = vote_agreement(primary_answers)
 
-        # Décision de routage
+        # 决定是否路由到次模型
         used_model = primary
         final_voted = primary_voted
         final_agreement = primary_agreement
@@ -409,7 +409,7 @@ def evaluate_pipeline_cascade(models: list[str], data: list[dict],
         route = "primary"
 
         if primary_agreement < threshold_high:
-            # Re-router vers le modèle de fallback
+            # 路由到备用模型
             route = "rerouted" if primary_agreement >= threshold_low else "uncertain"
             fallback_answers = []
             for ki in range(k):
@@ -421,13 +421,13 @@ def evaluate_pipeline_cascade(models: list[str], data: list[dict],
             fallback_voted = majority_vote(fallback_answers)
             fallback_agreement = vote_agreement(fallback_answers)
 
-            # Choisir la réponse avec le meilleur accord
+            # 选择一致程度最高的答案
             if fallback_agreement > primary_agreement:
                 final_voted = fallback_voted
                 final_agreement = fallback_agreement
                 final_answers = fallback_answers
                 used_model = fallback
-            # Sinon garder le primaire (même avec accord faible)
+            # 否则保留主模型的答案，即使一致程度较低
 
         stats[route if route != "primary" else "primary_accepted"] += 1
 
@@ -473,7 +473,7 @@ def evaluate_pipeline_cascade(models: list[str], data: list[dict],
                             threshold_high, threshold_low, stats)
 
 
-# ── Compilation des résultats ──────────────────────────────────────────────
+# ── 汇总结果 ────────────────────────────────────────────────────────────
 
 def _compile(details: list[dict], model: str,
              k: int, temperature: float) -> dict:
@@ -541,10 +541,10 @@ def _compile_cascade(details: list[dict], models: list[str],
     }
 
 
-# ── Affichage comparatif ──────────────────────────────────────────────────
+# ── 展示比较结果 ───────────────────────────────────────────────────────
 
 def print_comparison(results: list[dict]):
-    """Compare SC pipeline avec baseline V4."""
+    """将自一致性流程与 V4 基线比较。"""
     v4 = load_v4_baseline()
     v4_em = v4.get("exact_accuracy", 0) if v4 else None
     v4_f1 = v4.get("avg_token_f1", 0) if v4 else None
@@ -589,7 +589,7 @@ def print_comparison(results: list[dict]):
     print()
 
 
-# ── Main ───────────────────────────────────────────────────────────────────
+# ── 主流程 ─────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -615,14 +615,14 @@ def main():
                         help="Seuil d'accord bas (default: 0.4)")
     args = parser.parse_args()
 
-    # Charger les données
+    # 加载数据
     data = load_multihop_data(args.n)
     print(f"Questions multi-hop : {len(data)}")
 
     all_results = []
 
     if args.cascade:
-        # Mode V5b : cascade
+        # V5b 模式：级联
         result = evaluate_pipeline_cascade(
             args.cascade_models, data,
             k=args.k, temperature=args.temp,
@@ -631,7 +631,7 @@ def main():
         )
         all_results.append(result)
     else:
-        # Mode V5a : SC simple
+        # V5a 模式：基础自一致性
         models = args.models or [args.model]
         for model in models:
             result = evaluate_pipeline_sc(
@@ -642,7 +642,7 @@ def main():
 
     print_comparison(all_results)
 
-    # Sauvegarder le résumé
+    # 保存汇总结果
     os.makedirs(RESULTS_SC_DIR, exist_ok=True)
     summary_path = os.path.join(RESULTS_SC_DIR, "pipeline_sc_summary.json")
     summary = []

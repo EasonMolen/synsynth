@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Benchmark multi-modèles pour SYNSYNTH+.
+SYNSYNTH+ 的多模型基准测试。
 
-Teste chaque modèle Ollama sur un petit échantillon de chaque tâche :
-  1. Extraction de relations (JSON parse + F1)
-  2. Text-to-Query (Cypher generation + accuracy)
-  3. Raisonnement multi-hop (exact match)
-  4. RAG fidélité
+使用每项任务的小批量样本评估各 Ollama 模型：
+  1. 关系抽取（JSON 解析与 F1）
+  2. 文本到查询（生成 Cypher 并评估准确率）
+  3. 多跳推理（完全匹配）
+  4. RAG 忠实度
 
-Usage :
+用法：
     python benchmark_models.py [--samples N]
 """
 from __future__ import annotations
@@ -19,15 +19,14 @@ import os
 import sys
 import time
 
-# ── Empêcher l'import initial de synsynth_model (qui fait _check_ollama) ──
-# On doit importer APRÈS avoir patché le modèle
+# ── 将 scripts/ 加入模块搜索路径，再导入项目模块 ─────────────────────────
 WORKSPACE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, WORKSPACE)
 
 from synsynth_config import logger, RESULTS_DIR
 
-# ── Modèles candidats par tâche ──────────────────────────────────────────
-# (model_name, note_pourquoi)
+# ── 各任务的候选模型 ──────────────────────────────────────────────────
+# （模型名称，选择理由）
 EXTRACTION_MODELS = [
     "gemma4:26b",
     "qwen3.5:27b",
@@ -68,14 +67,14 @@ RAG_MODELS = [
 
 
 def set_model(model_name: str):
-    """Change le modèle actif dans synsynth_model (monkey-patch)."""
+    """通过运行时替换设置 synsynth_model 中的当前模型。"""
     import synsynth_model
     synsynth_model.OLLAMA_MODEL = model_name
     logger.info("── Modèle changé → %s ──", model_name)
 
 
 def warm_up(model_name: str) -> bool:
-    """Charge le modèle en mémoire avec un prompt trivial. Retourne True si OK."""
+    """用简单提示词预热模型；成功时返回 True。"""
     import synsynth_model
     try:
         set_model(model_name)
@@ -87,43 +86,43 @@ def warm_up(model_name: str) -> bool:
         return False
 
 
-# ── Benchmark Extraction ────────────────────────────────────────────────
+# ── 关系抽取基准测试 ──────────────────────────────────────────────────
 def bench_extraction(n_samples: int) -> dict:
-    """Teste l'extraction sur n_samples avec le modèle courant."""
+    """使用当前模型评估 n_samples 个关系抽取样本。"""
     import exp_extraction
     return exp_extraction.run(n_samples)
 
 
-# ── Benchmark Query ─────────────────────────────────────────────────────
+# ── 查询生成基准测试 ──────────────────────────────────────────────────
 def bench_query(n_samples: int) -> dict:
-    """Teste text-to-query sur n_samples avec le modèle courant."""
+    """使用当前模型评估 n_samples 个文本到查询样本。"""
     import exp_query
     return exp_query.run(n_samples)
 
 
-# ── Benchmark Multihop ──────────────────────────────────────────────────
+# ── 多跳推理基准测试 ──────────────────────────────────────────────────
 def bench_multihop(n_samples: int) -> dict:
-    """Teste le raisonnement multi-hop sur n_samples."""
+    """评估 n_samples 个多跳推理样本。"""
     import exp_multihop
     return exp_multihop.run(n_samples)
 
 
-# ── Benchmark RAG ───────────────────────────────────────────────────────
+# ── RAG 基准测试 ──────────────────────────────────────────────────────
 def bench_rag(n_samples: int) -> dict:
-    """Teste RAG fidélité sur n_samples."""
+    """评估 n_samples 个 RAG 忠实度样本。"""
     import exp_rag
     return exp_rag.run(n_samples)
 
 
-# ── Fonctions utilitaires ──────────────────────────────────────────────
+# ── 辅助函数 ──────────────────────────────────────────────────────────
 def extract_metrics(result: dict, task: str) -> dict:
-    """Extrait les métriques clés d'un résultat d'expérience."""
+    """从实验结果中提取主要指标。"""
     m = {"task": task}
     if task == "extraction":
         m["f1"] = result.get("f1_score", 0)
         m["precision"] = result.get("precision", 0)
         m["recall"] = result.get("recall", 0)
-        # Calculer parse_fail rate
+        # 计算解析失败率
         details = result.get("details", [])
         pf = sum(1 for d in details if d.get("status") == "parse_fail")
         m["parse_fail_rate"] = round(pf / len(details), 4) if details else 0
@@ -132,7 +131,7 @@ def extract_metrics(result: dict, task: str) -> dict:
         m["cypher_valid"] = result.get("cypher_syntax_valid_rate", 0)
     elif task == "multihop":
         m["exact_match"] = result.get("exact_match_accuracy", 0)
-        # Fallback : calculer depuis details
+        # 如果缺少汇总值，则根据明细计算
         if m["exact_match"] == 0:
             details = result.get("details", [])
             if details:
@@ -149,7 +148,7 @@ def extract_metrics(result: dict, task: str) -> dict:
 
 def run_task_benchmark(task: str, models: list[str], n_samples: int,
                        bench_fn) -> list[dict]:
-    """Exécute un benchmark pour une tâche sur tous les modèles candidats."""
+    """对某任务的全部候选模型运行基准测试。"""
     results = []
     for model in models:
         logger.info("=" * 60)
@@ -186,7 +185,7 @@ def run_task_benchmark(task: str, models: list[str], n_samples: int,
 
 
 def print_leaderboard(all_results: list[dict]):
-    """Affiche un tableau récapitulatif par tâche."""
+    """按任务显示汇总表。"""
     tasks = {}
     for r in all_results:
         task = r.get("task", "?")
@@ -203,7 +202,7 @@ def print_leaderboard(all_results: list[dict]):
         print(f"  TÂCHE: {task.upper()}")
         print(f"{'─' * 60}")
 
-        # Tri par métrique principale
+        # 按主要指标排序
         if task == "extraction":
             key = "f1"
             results.sort(key=lambda r: r.get(key, 0), reverse=True)
@@ -251,7 +250,7 @@ def print_leaderboard(all_results: list[dict]):
         else:
             key = None
 
-        # Meilleur modèle
+        # 最佳模型
         ok_results = [r for r in results if r.get("status") == "ok"]
         if ok_results and key:
             best = ok_results[0]
@@ -301,10 +300,10 @@ def main():
 
     total_time = time.time() - t_global
 
-    # Afficher le leaderboard
+    # 显示排行榜
     best_per_task = print_leaderboard(all_results)
 
-    # Sauvegarder les résultats
+    # 保存结果
     out_file = os.path.join(RESULTS_DIR, "benchmark_models.json")
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump({

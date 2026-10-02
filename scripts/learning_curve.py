@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Suggestion B — Courbe d'apprentissage zero-shot → QLoRA frugal.
+建议 B：零样本到轻量 QLoRA 的学习曲线。
 
-Entraîne Qwen2.5-7B-Instruct avec QLoRA sur {10, 50, 200, 500, 1000, 3000}
-échantillons de Re-DocRED / HotpotQA, évalue chaque checkpoint, et trace
-la courbe F1/EM = f(n_train).
+分别使用 {10, 50, 200, 500, 1000, 3000} 个 Re-DocRED 或 HotpotQA
+样本对 Qwen2.5-7B-Instruct 进行 QLoRA 微调，评估每个检查点，
+绘制 F1/EM 随训练样本数变化的曲线。
 
-Usage :
+用法：
     python learning_curve.py --task extraction
     python learning_curve.py --task multihop
     python learning_curve.py --task all
@@ -20,7 +20,7 @@ import random
 import sys
 import time
 
-# ── ajouter scripts/ au PYTHONPATH si nécessaire ────────────────────────
+# ── 按需将 scripts/ 加入 PYTHONPATH ──────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
@@ -35,16 +35,16 @@ from qlora_finetune import (
     _unload_ollama_models,
 )
 
-# ── Points de la courbe d'apprentissage ─────────────────────────────────
+# ── 学习曲线采样点 ────────────────────────────────────────────────────
 CURVE_POINTS = [10, 50, 200, 500, 1000, 3000]
 
-# ── Répertoire de sortie ────────────────────────────────────────────────
+# ── 输出目录 ──────────────────────────────────────────────────────────
 LC_RESULTS_DIR = safe_path("results", "learning_curve")
 os.makedirs(LC_RESULTS_DIR, exist_ok=True)
 
 
 def _subsample_jsonl(src_path: str, n: int, seed: int = RANDOM_SEED) -> str:
-    """Créé un fichier JSONL sous-échantillonné de n lignes. Renvoie le chemin."""
+    """创建包含 n 行的 JSONL 子样本文件，并返回路径。"""
     dst_path = os.path.join(QLORA_DATA_DIR, f"{os.path.basename(src_path).replace('.jsonl', '')}_n{n}.jsonl")
     if os.path.exists(dst_path):
         with open(dst_path) as f:
@@ -65,7 +65,7 @@ def _subsample_jsonl(src_path: str, n: int, seed: int = RANDOM_SEED) -> str:
 
 
 def _train_at_n(task: str, n: int, base_model: str = DEFAULT_BASE_MODEL) -> str:
-    """Entraîne QLoRA sur n échantillons. Renvoie le chemin de l'adaptateur."""
+    """用 n 个样本训练 QLoRA，并返回适配器路径。"""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     from peft import LoraConfig
@@ -77,12 +77,12 @@ def _train_at_n(task: str, n: int, base_model: str = DEFAULT_BASE_MODEL) -> str:
         logger.info("Adaptateur déjà entraîné : %s", adapter_dir)
         return adapter_dir
 
-    # Données source complètes
+    # 完整的原始数据
     full_jsonl = os.path.join(QLORA_DATA_DIR, f"{task}_train.jsonl")
     if not os.path.exists(full_jsonl):
         raise FileNotFoundError(f"Données manquantes : {full_jsonl}")
 
-    # Sous-échantillonner
+    # 抽取子样本
     sub_jsonl = _subsample_jsonl(full_jsonl, n)
 
     samples = []
@@ -95,14 +95,14 @@ def _train_at_n(task: str, n: int, base_model: str = DEFAULT_BASE_MODEL) -> str:
     logger.info("Learning curve — tâche=%s, n_train=%d", task, n)
     logger.info("=" * 60)
 
-    # Tokenizer
+    # 加载分词器
     tokenizer = AutoTokenizer.from_pretrained(
         base_model, cache_dir=HF_CACHE, trust_remote_code=True,
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Quantification 4-bit
+    # 4 位量化
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -130,7 +130,7 @@ def _train_at_n(task: str, n: int, base_model: str = DEFAULT_BASE_MODEL) -> str:
         task_type="CAUSAL_LM",
     )
 
-    # Chat template → texte brut
+    # 将对话模板转换为纯文本
     def _apply_template(example):
         text = tokenizer.apply_chat_template(
             example["messages"], tokenize=False, add_generation_prompt=False,
@@ -139,10 +139,10 @@ def _train_at_n(task: str, n: int, base_model: str = DEFAULT_BASE_MODEL) -> str:
 
     dataset = dataset.map(_apply_template, remove_columns=["messages"])
 
-    # Adapter les hyperparamètres : epochs = max(3, 10 si n <= 50)
+    # 调整超参数：小样本（n <= 50）训练 10 个周期，否则至少 3 个
     num_epochs = 3 if n >= 200 else 10
-    lr = 2e-4 if n <= 200 else 1e-4  # lr réduit pour grands n (évite overfitting)
-    grad_accum = max(1, min(8, n // 2))  # Éviter grad_accum > n_samples/batch
+    lr = 2e-4 if n <= 200 else 1e-4  # 大样本使用较低学习率，避免过拟合
+    grad_accum = max(1, min(8, n // 2))  # 避免梯度累积步数超过每批样本数
     batch_size = min(2, n)
 
     ckpt_dir = os.path.join(QLORA_MODELS_DIR, f"{task}_n{n}", "checkpoints")
@@ -204,7 +204,7 @@ def _train_at_n(task: str, n: int, base_model: str = DEFAULT_BASE_MODEL) -> str:
 
 
 def _evaluate_extraction(adapter_dir: str, n_train: int) -> dict:
-    """Évalue un adaptateur extraction sur les 500 échantillons DocRED."""
+    """在 500 个 DocRED 样本上评估关系抽取适配器。"""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     from peft import PeftModel
@@ -235,7 +235,7 @@ def _evaluate_extraction(adapter_dir: str, n_train: int) -> dict:
     model = PeftModel.from_pretrained(model, adapter_dir)
     model.eval()
 
-    # Monkey-patch synsynth_model pour utiliser HF
+    # 运行时替换 synsynth_model，使其使用 Hugging Face 模型
     import synsynth_model
     from qlora_finetune import (
         _hf_generate, _hf_generate_structured,
@@ -269,7 +269,7 @@ def _evaluate_extraction(adapter_dir: str, n_train: int) -> dict:
 
 
 def _evaluate_multihop(adapter_dir: str, n_train: int) -> dict:
-    """Évalue un adaptateur multihop sur les 500 échantillons HotpotQA."""
+    """在 500 个 HotpotQA 样本上评估多跳推理适配器。"""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     from peft import PeftModel
@@ -330,11 +330,11 @@ def _evaluate_multihop(adapter_dir: str, n_train: int) -> dict:
 
 
 def run_learning_curve(task: str) -> list[dict]:
-    """Exécute la courbe d'apprentissage complète pour une tâche."""
+    """运行某项任务的完整学习曲线实验。"""
     results = []
     output_path = os.path.join(LC_RESULTS_DIR, f"learning_curve_{task}.json")
 
-    # Charger les résultats existants
+    # 加载已有结果
     if os.path.exists(output_path):
         with open(output_path) as f:
             results = json.load(f)
@@ -344,7 +344,7 @@ def run_learning_curve(task: str) -> list[dict]:
         done_ns = set()
 
     evaluate_fn = _evaluate_extraction if task == "extraction" else _evaluate_multihop
-    # multihop_v2 utilise le même évaluateur que multihop (même jeu de test)
+    # multihop_v2 与 multihop 使用相同测试集和评估器
 
     for n in CURVE_POINTS:
         if n in done_ns:
@@ -355,21 +355,21 @@ def run_learning_curve(task: str) -> list[dict]:
         logger.info("COURBE D'APPRENTISSAGE — %s — n_train=%d", task, n)
         logger.info("━" * 60)
 
-        # Entraîner
+        # 训练
         adapter_dir = _train_at_n(task, n)
 
-        # Évaluer
+        # 评估
         result = evaluate_fn(adapter_dir, n)
         results.append(result)
 
-        # Sauvegarder incrémentalement
+        # 逐步保存结果
         with open(output_path, "w") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
         logger.info("Résultat sauvegardé → %s", output_path)
 
-    # Ajouter le point zero-shot (n=0) à partir des résultats existants
+    # 根据已有结果加入零样本数据点（n=0）
     if 0 not in {r.get("n_train") for r in results}:
-        # multihop_v2 utilise le même zero-shot que multihop
+        # multihop_v2 与 multihop 共用零样本基线
         zs_task = "multihop" if task in ("multihop_v2", "multihop_v3", "multihop_v4") else task
         zs_path = os.path.join(RESULTS_DIR, f"{zs_task}.json")
         if os.path.exists(zs_path):
@@ -379,7 +379,7 @@ def run_learning_curve(task: str) -> list[dict]:
             zs["method"] = "zero-shot"
             results.insert(0, zs)
 
-    # Trier par n_train
+    # 按训练样本数排序
     results.sort(key=lambda r: r.get("n_train", 0))
 
     with open(output_path, "w") as f:
@@ -390,7 +390,7 @@ def run_learning_curve(task: str) -> list[dict]:
 
 
 def plot_learning_curve(task: str):
-    """Trace la courbe d'apprentissage."""
+    """绘制学习曲线。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -404,14 +404,14 @@ def plot_learning_curve(task: str):
     if task == "extraction":
         scores = [r.get("f1_score", 0) for r in results]
         metric_label = "F1 Score"
-    else:  # multihop, multihop_v2, multihop_v3, multihop_v4
+    else:  # 处理 multihop 及其 V2、V3、V4 版本
         scores = [r.get("exact_match", r.get("accuracy", 0)) for r in results]
         metric_label = "Exact Match"
 
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.plot(ns, scores, "o-", color="#2196F3", linewidth=2, markersize=8, label="QLoRA 4-bit (Qwen2.5-7B)")
 
-    # Baseline zero-shot Gemma-4-27B
+    # Gemma-4-27B 的零样本基线
     if task == "extraction":
         ax.axhline(y=0.7023, color="#FF9800", linestyle="--", linewidth=1.5,
                     label="Zero-shot Gemma-4-27B (F1=0.70)")
@@ -447,7 +447,7 @@ def main():
                         help="Tracer les courbes sans relancer les entraînements.")
     args = parser.parse_args()
 
-    tasks = ["extraction", "multihop"] if args.task == "all" else [args.task]  # multihop_v2 must be requested explicitly
+    tasks = ["extraction", "multihop"] if args.task == "all" else [args.task]  # multihop_v2 需明确指定
 
     for task in tasks:
         if not args.plot_only:

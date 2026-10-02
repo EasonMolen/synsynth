@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-B1 — Benchmark multi-modèle sur l'extraction de relations (DocRED).
+B1：关系抽取（DocRED）的多模型基准测试。
 
-Compare spécialiste (gemma4:26b) vs généralistes (phi4, qwen3, etc.)
-sur le même jeu de données (500 échantillons Re-DocRED).
+在同一份 Re-DocRED 数据（500 个样本）上比较专用模型 gemma4:26b
+与 phi4、qwen3 等通用模型。
 
-Usage :
-    python scripts/benchmark_extraction.py                         # tous les modèles
-    python scripts/benchmark_extraction.py --models phi4:latest    # un seul
-    python scripts/benchmark_extraction.py --n 100                 # sous-ensemble
+用法：
+    python scripts/benchmark_extraction.py                         # 所有模型
+    python scripts/benchmark_extraction.py --models phi4:latest    # 单个模型
+    python scripts/benchmark_extraction.py --n 100                 # 部分样本
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ import time
 import urllib.request
 import urllib.error
 
-# ── Chemins ────────────────────────────────────────────────────────────────
+# ── 路径 ────────────────────────────────────────────────────────────────
 WORKSPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULTS_DIR = os.path.join(WORKSPACE, "results", "extraction_benchmark")
 SCRIPTS_DIR = os.path.join(WORKSPACE, "scripts")
@@ -30,11 +30,11 @@ sys.path.insert(0, SCRIPTS_DIR)
 from synsynth_stats import token_f1, bootstrap_ci
 from synsynth_data import load_extraction_data
 
-# ── Configuration Ollama ────────────────────────────────────────────────────
+# ── Ollama 配置 ─────────────────────────────────────────────────────────
 OLLAMA_BASE = "http://127.0.0.1:11434"
 TIMEOUT = 600
 
-# ── Wikidata → label (identique à exp_extraction.py) ──────────────────────
+# ── Wikidata 属性到标签的映射，与 exp_extraction.py 一致 ──────────────
 _WIKIDATA_LABELS: dict[str, str] = {
     "P6": "head_of_government", "P17": "country", "P19": "place_of_birth",
     "P20": "place_of_death", "P22": "father", "P25": "mother",
@@ -81,19 +81,19 @@ _WIKIDATA_LABELS: dict[str, str] = {
 _VALID_RELATIONS = sorted(set(_WIKIDATA_LABELS.values()))
 _RELATIONS_LIST = ", ".join(_VALID_RELATIONS)
 
-# ── Modèles ────────────────────────────────────────────────────────────────
+# ── 模型 ────────────────────────────────────────────────────────────────
 MODELS = [
-    "gemma4:26b",            # spécialiste extraction (F1=0.702, baseline)
-    "phi4:latest",           # 14B dense
-    "phi4-reasoning:plus",   # 14B reasoning
-    "qwen3:14b",             # 14B thinking
-    "gpt-oss:20b",           # 20B MoE
-    "mistral-small:latest",  # 22B dense
-    "qwen3.5:27b",           # 27B hybrid
-    "deepseek-r1:32b",       # 32B reasoning
+    "gemma4:26b",            # 关系抽取专用模型，基线 F1=0.702
+    "phi4:latest",           # 14B 稠密模型
+    "phi4-reasoning:plus",   # 14B 推理模型
+    "qwen3:14b",             # 14B 支持推理模式
+    "gpt-oss:20b",           # 20B 混合专家模型
+    "mistral-small:latest",  # 22B 稠密模型
+    "qwen3.5:27b",           # 27B 混合架构模型
+    "deepseek-r1:32b",       # 32B 推理模型
 ]
 
-# ── System prompt (identique à exp_extraction.py) ──────────────────────────
+# ── 系统提示词，与 exp_extraction.py 一致 ──────────────────────────────
 SYSTEM_PROMPT = (
     "You are an expert in Relation Extraction. "
     "Given a text and two named entities (head and tail), "
@@ -112,7 +112,7 @@ SYSTEM_PROMPT = (
     "{\"relation\": \"…\", \"confidence\": 0.0-1.0}"
 )
 
-# --- Synonymes (identiques à exp_extraction.py) ---
+# --- 同义词，与 exp_extraction.py 一致 ---
 _SYNONYMS = {
     "start_time": {"year", "date", "start", "start_date", "began", "beginning", "from"},
     "end_time": {"year", "date", "end", "end_date", "ended", "until", "to"},
@@ -149,7 +149,7 @@ _SYNONYMS = {
 }
 
 
-# ── Appel Ollama ────────────────────────────────────────────────────────────
+# ── 调用 Ollama ─────────────────────────────────────────────────────────
 
 def ollama_chat(model: str, messages: list[dict],
                 json_format: bool = False) -> str:
@@ -183,7 +183,7 @@ def ollama_chat(model: str, messages: list[dict],
         return ""
 
 
-# ── Parsing / Matching ─────────────────────────────────────────────────────
+# ── 解析与匹配 ──────────────────────────────────────────────────────────
 
 def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip().lower())
@@ -236,7 +236,7 @@ def _relation_match(pred_rel: str, gold_rel: str) -> bool:
     return False
 
 
-# ── Évaluation d'un modèle ─────────────────────────────────────────────────
+# ── 评估单个模型 ────────────────────────────────────────────────────────
 
 def evaluate_model(model: str, data: list[dict],
                    checkpoint_path: str) -> dict:
@@ -281,7 +281,7 @@ def evaluate_model(model: str, data: list[dict],
         raw = ollama_chat(model, messages, json_format=True)
         pred = _parse_response(raw)
 
-        # Retry
+        # 失败时重试
         if pred is None:
             messages_retry = [
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -357,7 +357,7 @@ def _compile(details, tp, fp, fn, model, elapsed) -> dict:
     }
 
 
-# ── Synthèse ──────────────────────────────────────────────────────────────
+# ── 汇总 ───────────────────────────────────────────────────────────────
 
 def print_leaderboard(results: list[dict]):
     print("\n" + "="*80)
@@ -402,7 +402,7 @@ def save_summary(results: list[dict]):
     print(f"\nSummary → {path}")
 
 
-# ── Main ───────────────────────────────────────────────────────────────────
+# ── 主流程 ─────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(

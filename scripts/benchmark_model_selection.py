@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Benchmark zero-shot de 8 LLMs sur les questions difficiles du multihop V4.
+使用多跳推理 V4 的难题，对八个大语言模型进行零样本基准测试。
 
-Usage:
-    python scripts/benchmark_model_selection.py                          # 181 questions difficiles
-    python scripts/benchmark_model_selection.py --models phi4 qwen3:14b  # sélection
-    python scripts/benchmark_model_selection.py --full                    # 500 questions complètes
+用法：
+    python scripts/benchmark_model_selection.py                          # 181 道难题
+    python scripts/benchmark_model_selection.py --models phi4 qwen3:14b  # 指定模型
+    python scripts/benchmark_model_selection.py --full                    # 全部 500 道题
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import time
 import urllib.request
 import urllib.error
 
-# ── Chemins ────────────────────────────────────────────────────────────────
+# ── 路径 ────────────────────────────────────────────────────────────────
 WORKSPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIFFICULT_PATH = os.path.join(WORKSPACE, "results", "model_selection", "difficult_questions.json")
 RESULTS_DIR = os.path.join(WORKSPACE, "results", "model_selection")
@@ -27,23 +27,23 @@ SCRIPTS_DIR = os.path.join(WORKSPACE, "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 from synsynth_stats import token_f1
 
-# ── Configuration Ollama ────────────────────────────────────────────────────
+# ── Ollama 配置 ─────────────────────────────────────────────────────────
 OLLAMA_BASE = "http://127.0.0.1:11434"
 TIMEOUT = 600
 
-# ── Modèles à benchmarker ──────────────────────────────────────────────────
+# ── 待评估模型 ──────────────────────────────────────────────────────────
 MODELS = [
-    "phi4:latest",           # 14B dense — baseline
-    "phi4-reasoning:plus",   # 14B dense — SFT o3-mini + RL
-    "qwen3:14b",             # 14B dense — thinking
-    "gemma4:26b",            # 26B MoE — 3.8B actifs
-    "gpt-oss:20b",           # 20B MoE — OpenAI open-weight
-    "magistral:24b",         # 24B dense — Mistral reasoning
-    "qwen3.5:27b",           # 27B hybrid — dernier SOTA
-    "deepseek-r1:32b",       # 32B dense — reasoning distillé
+    "phi4:latest",           # 14B 稠密模型，基线
+    "phi4-reasoning:plus",   # 14B 稠密模型，经过 o3-mini 监督微调与强化学习
+    "qwen3:14b",             # 14B 稠密模型，支持推理模式
+    "gemma4:26b",            # 26B 混合专家模型，激活约 3.8B 参数
+    "gpt-oss:20b",           # 20B 混合专家模型，OpenAI 开放权重
+    "magistral:24b",         # 24B 稠密模型，Mistral 推理模型
+    "qwen3.5:27b",           # 27B 混合架构模型，当时的较新模型
+    "deepseek-r1:32b",       # 32B 稠密模型，使用蒸馏推理能力
 ]
 
-# ── System prompt (identique à V4 eval) ────────────────────────────────────
+# ── 系统提示词，与 V4 评估保持一致 ────────────────────────────────────
 SYSTEM_PROMPT = (
     "Tu es un agent de raisonnement multi-hop. "
     "Tu reçois une question complexe et des faits de support. "
@@ -66,7 +66,7 @@ SYSTEM_PROMPT = (
 )
 
 
-# ── Appel Ollama ────────────────────────────────────────────────────────────
+# ── 调用 Ollama ─────────────────────────────────────────────────────────
 
 def ollama_chat(model: str, messages: list[dict], json_format: bool = False) -> str:
     payload = {
@@ -99,7 +99,7 @@ def ollama_chat(model: str, messages: list[dict], json_format: bool = False) -> 
         return ""
 
 
-# ── Parsing réponse ─────────────────────────────────────────────────────────
+# ── 解析回答 ────────────────────────────────────────────────────────────
 
 def _strip_markdown(raw: str) -> str:
     m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw, re.DOTALL)
@@ -122,13 +122,13 @@ def parse_response(raw: str) -> dict | None:
     if not raw.strip():
         return None
 
-    # Retirer <think>...</think> pour les modèles reasoning
+    # 去掉推理模型输出的 <think>...</think> 部分
     cleaned = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
     if not cleaned:
         cleaned = raw
     cleaned = _strip_markdown(cleaned)
 
-    # json.loads direct
+    # 优先直接解析 JSON
     try:
         obj = json.loads(cleaned)
         if isinstance(obj, dict) and "answer" in obj:
@@ -137,7 +137,7 @@ def parse_response(raw: str) -> dict | None:
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Parser profondeur accolades
+    # 根据花括号嵌套层级解析
     depth = 0
     start = None
     for i, c in enumerate(cleaned):
@@ -157,7 +157,7 @@ def parse_response(raw: str) -> dict | None:
                     pass
                 start = None
 
-    # Regex fallback
+    # 解析失败时用正则提取
     m = re.search(r'"answer"\s*:\s*"([^"]*)"', cleaned)
     if m:
         answer = m.group(1).strip()
@@ -167,12 +167,12 @@ def parse_response(raw: str) -> dict | None:
             chain = re.findall(r'"([^"]+)"', chain_match[0])
         return {"answer": answer, "reasoning_chain": chain}
 
-    # Fallback texte
+    # 最后按纯文本处理
     answer = _extract_short_answer(cleaned)
     return {"answer": answer, "reasoning_chain": []}
 
 
-# ── Matching ────────────────────────────────────────────────────────────────
+# ── 答案匹配 ────────────────────────────────────────────────────────────
 
 def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip().lower())
@@ -188,7 +188,7 @@ def answer_match(pred: str, gold: str) -> bool:
     return False
 
 
-# ── Chargement données ─────────────────────────────────────────────────────
+# ── 加载数据 ────────────────────────────────────────────────────────────
 
 def load_difficult_questions() -> list[dict]:
     with open(DIFFICULT_PATH) as f:
@@ -207,14 +207,14 @@ def load_full_eval_data() -> list[dict]:
 
 
 def load_supporting_facts() -> dict[int, list[str]]:
-    """Charge idx → supporting_facts depuis le dataset HotpotQA."""
+    """从 HotpotQA 数据集中加载题号到支持事实的映射。"""
     sys.path.insert(0, SCRIPTS_DIR)
     from synsynth_data import load_multihop_data
     data = load_multihop_data(500)
     return {i: d.get("supporting_facts", []) for i, d in enumerate(data)}
 
 
-# ── Évaluation d'un modèle ─────────────────────────────────────────────────
+# ── 评估单个模型 ────────────────────────────────────────────────────────
 
 def evaluate_model(model: str, questions: list[dict],
                    facts_by_idx: dict[int, list[str]],
@@ -308,7 +308,7 @@ def _compute_metrics(details: list[dict], model: str) -> dict:
     }
 
 
-# ── Main ────────────────────────────────────────────────────────────────────
+# ── 主流程 ──────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -357,7 +357,7 @@ def main():
         print(f"\n  → {model}: EM={result['em']:.3f}, F1={result['f1']:.3f}, "
               f"chain={result['chain_avg']:.1f}, JSON_brut={result['json_brut_pct']:.0f}%")
 
-    # Résumé
+    # 汇总结果
     print(f"\n{'='*60}")
     print("RÉSUMÉ")
     print(f"{'='*60}")

@@ -1,8 +1,8 @@
 """
-Expérience 1 — Extraction de relations (DocRED / TACRED style).
+实验 1：关系抽取（DocRED / TACRED 风格）。
 
-Le modèle Gemma-4 est utilisé comme extracteur : étant donné un texte,
-il doit identifier (head, relation, tail).  On mesure Precision, Recall, F1.
+Gemma-4 根据输入文本识别（头实体、关系、尾实体），
+并计算精确率、召回率和 F1。
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from synsynth_data import load_extraction_data
 from synsynth_stats import bootstrap_ci
 from synsynth_checkpoint import save_checkpoint, load_checkpoint, clear_checkpoint
 
-# Mapping Wikidata property → label lisible (pour les relations Re-DocRED)
+# 将 Wikidata 属性映射为 Re-DocRED 关系的可读名称
 _WIKIDATA_LABELS: dict[str, str] = {
     "P6": "head_of_government", "P17": "country", "P19": "place_of_birth",
     "P20": "place_of_death", "P22": "father", "P25": "mother",
@@ -89,7 +89,7 @@ def _normalize(s: str) -> str:
 
 
 def _parse_response(raw: str) -> dict | None:
-    """Extrait le premier objet JSON trouvé dans la réponse."""
+    """提取回答中的第一个 JSON 对象。"""
     m = re.search(r"\{[^}]*\}", raw, re.DOTALL)
     if m:
         try:
@@ -102,37 +102,37 @@ def _parse_response(raw: str) -> dict | None:
 
 
 def _relation_match(pred_rel: str, gold_rel: str) -> bool:
-    """Matching souple entre la relation prédite et le gold standard.
+    """宽松匹配预测关系与标准关系。
 
-    Le gold peut être un code Wikidata (P276) ou un label textuel.
-    On compare le label Wikidata résolu avec la prédiction du modèle.
+    标准关系可以是 Wikidata 属性码（如 P276）或文本标签。
+    匹配时将属性码解析成标签，再与模型预测比较。
     """
     pred_n = _normalize(pred_rel).replace(" ", "_")
     gold_n = _normalize(gold_rel).replace(" ", "_")
 
-    # Match exact
+    # 完全匹配
     if pred_n == gold_n:
         return True
 
-    # Résoudre le code Wikidata en label
+    # 将 Wikidata 属性码解析为标签
     gold_label = _WIKIDATA_LABELS.get(gold_rel.upper(), "").lower()
     if not gold_label:
         gold_label = _WIKIDATA_LABELS.get(gold_rel, "").lower()
 
     if gold_label:
-        # Match exact avec le label résolu
+        # 与解析后的标签完全匹配
         if pred_n == gold_label.replace(" ", "_"):
             return True
-        # Match par inclusion (ex: "location" dans "headquarters_location")
+        # 子串匹配，例如 location 包含在 headquarters_location 中
         if pred_n in gold_label or gold_label in pred_n:
             return True
-        # Match par mots communs significatifs (au moins un mot de 4+ chars)
+        # 匹配有意义的共同词，至少一个词长为四个字符
         pred_words = {w for w in pred_n.split("_") if len(w) >= 4}
         gold_words = {w for w in gold_label.split("_") if len(w) >= 4}
         if pred_words and gold_words and (pred_words & gold_words):
             return True
-        # Synonymes sémantiques courants et confusions fréquentes
-        # Basé sur l'analyse de la matrice de confusion (N=500, avril 2026)
+        # 常见语义同义词及易混淆关系
+        # 根据 2026 年 4 月的混淆矩阵分析整理（N=500）
         _SYNONYMS = {
             "start_time": {"year", "date", "start", "start_date", "began", "beginning", "from"},
             "end_time": {"year", "date", "end", "end_date", "ended", "until", "to"},
@@ -175,12 +175,12 @@ def _relation_match(pred_rel: str, gold_rel: str) -> bool:
 
 
 def _is_nuextract() -> bool:
-    """Vérifie si le modèle courant est nuextract."""
+    """检查当前模型是否为 nuextract。"""
     return "nuextract" in synsynth_model.OLLAMA_MODEL.lower()
 
 
 def _nuextract_call(sample: dict) -> str:
-    """Appel spécifique au format nuextract (### Template / ### Text)."""
+    """按 nuextract 的 ### Template / ### Text 格式调用模型。"""
     template = json.dumps({"relation": "", "confidence": 0.0})
     text_block = (
         f"{sample['text']}\n\n"
@@ -197,14 +197,14 @@ def _nuextract_call(sample: dict) -> str:
 
 
 def _entity_match(pred: str, gold: str) -> bool:
-    """Match souple pour les noms d'entités."""
+    """宽松匹配实体名称。"""
     p, g = _normalize(pred), _normalize(gold)
     if p == g:
         return True
-    # Inclusion bi-directionnelle
+    # 双向子串匹配
     if p in g or g in p:
         return True
-    # Match par mots communs (au moins 50% des mots gold retrouvés)
+    # 按共同词匹配：至少找到标准名称中一半的词
     gold_words = set(g.split())
     pred_words = set(p.split())
     if gold_words and len(gold_words & pred_words) >= len(gold_words) * 0.5:
@@ -212,14 +212,14 @@ def _entity_match(pred: str, gold: str) -> bool:
     return False
 
 
-# ── Point d'entrée ─────────────────────────────────────────────────────────
+# ── 程序入口 ────────────────────────────────────────────────────────────
 
 def run(n_samples: int | None = None) -> dict[str, Any]:
-    """Exécute l'expérience d'extraction et renvoie les métriques."""
+    """运行关系抽取实验并返回指标。"""
     data = load_extraction_data(n_samples) if n_samples else load_extraction_data()
     logger.info("=== Exp 1 : Extraction de relations — %d échantillons ===", len(data))
 
-    # ── Reprise depuis checkpoint ──────────────────────────────────────
+    # ── 从检查点继续 ────────────────────────────────────────────────
     ckpt = load_checkpoint("extraction")
     if ckpt:
         start_idx = ckpt["next_idx"]
@@ -242,7 +242,7 @@ def run(n_samples: int | None = None) -> dict[str, Any]:
         if _is_nuextract():
             raw = _nuextract_call(sample)
             pred = _parse_response(raw)
-            # Retry nuextract
+            # 重试 nuextract 调用
             if pred is None:
                 logger.info("  [retry] idx=%d — parse_fail (nuextract), nouvelle tentative", i)
                 raw = _nuextract_call(sample)
@@ -258,7 +258,7 @@ def run(n_samples: int | None = None) -> dict[str, Any]:
             raw = generate_structured(prompt, system=SYSTEM_PROMPT, json_mode=True, max_new_tokens=256)
             pred = _parse_response(raw)
 
-            # Retry une fois en cas d'échec de parsing
+            # 解析失败时再尝试一次
             if pred is None:
                 logger.info("  [retry] idx=%d — parse_fail, nouvelle tentative", i)
                 raw = generate_structured(
@@ -308,7 +308,7 @@ def run(n_samples: int | None = None) -> dict[str, Any]:
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
 
-    # Bootstrap CI sur les scores binaires par échantillon
+    # 根据每个样本的二元得分计算 Bootstrap 置信区间
     per_sample_correct = [
         1.0 if d.get("status") == "correct" else 0.0 for d in details
     ]

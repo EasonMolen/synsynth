@@ -1,12 +1,12 @@
 """
-Expérience 4 — Évaluation RAG & Fidélité (RAGAS-style).
+实验 4：RAG 与忠实度评估（RAGAS 风格）。
 
-Trois métriques RAGAS :
-  1. Faithfulness  — la réponse est-elle fidèle au contexte fourni ?
-  2. Answer Relevance — la réponse répond-elle à la question ?
-  3. Context Precision — le contexte contient-il l'information nécessaire ?
+三个 RAGAS 指标：
+  1. Faithfulness：答案是否忠于给定上下文？
+  2. Answer Relevance：答案是否切题？
+  3. Context Precision：上下文是否包含所需信息？
 
-On utilise le modèle Gemma-4 comme juge (LLM-as-a-judge).
+使用 Gemma-4 作为评审模型。
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from synsynth_stats import bootstrap_ci
 from faithfulness_checker import compute_faithfulness
 from synsynth_checkpoint import save_checkpoint, load_checkpoint, clear_checkpoint
 
-# ── Prompts juges ──────────────────────────────────────────────────────────
+# ── 评审提示词 ─────────────────────────────────────────────────────────
 
 ANSWER_SYSTEM = (
     "Tu es un assistant de réponse aux questions basé sur un graphe de "
@@ -61,27 +61,27 @@ JUDGE_CONTEXT_PRECISION = (
 
 
 def _safe_float(raw: str, key: str) -> float:
-    """Extraction robuste d'un float depuis une réponse JSON."""
+    """从 JSON 回答中稳健地提取浮点数。"""
     m = re.search(r'"' + key + r'"\s*:\s*([\d.]+)', raw)
     if m:
         try:
             return min(1.0, max(0.0, float(m.group(1))))
         except ValueError:
             pass
-    # Fallback : chercher n'importe quel float
+    # 退回到搜索任意浮点数
     floats = re.findall(r"0\.\d+|1\.0|1(?:\.\d+)?", raw)
     if floats:
         return min(1.0, max(0.0, float(floats[0])))
     return 0.0
 
 
-# ── Point d'entrée ─────────────────────────────────────────────────────────
+# ── 程序入口 ────────────────────────────────────────────────────────────
 
 def run(n_samples: int | None = None) -> dict[str, Any]:
     data = load_rag_data(n_samples) if n_samples else load_rag_data()
     logger.info("=== Exp 4 : RAG Faithfulness (RAGAS) — %d échantillons ===", len(data))
 
-    # ── Reprise depuis checkpoint ──────────────────────────────────────
+    # ── 从检查点继续 ────────────────────────────────────────────────
     ckpt = load_checkpoint("rag")
     if ckpt:
         start_idx = ckpt["next_idx"]
@@ -105,7 +105,7 @@ def run(n_samples: int | None = None) -> dict[str, Any]:
         question = sample["question"]
         context = sample["context"]
 
-        # ── Étape 1 : le modèle produit une réponse à partir du contexte ──
+        # ── 步骤 1：模型根据上下文生成答案 ────────────────────────────
         answer_prompt = (
             f"Contexte :\n{context}\n\n"
             f"Question : {question}\n\n"
@@ -115,7 +115,7 @@ def run(n_samples: int | None = None) -> dict[str, Any]:
             answer_prompt, system=ANSWER_SYSTEM, max_new_tokens=512,
         )
 
-        # ── Étape 2 : Évaluation Faithfulness ────────────────────────────
+        # ── 步骤 2：评估忠实度 ──────────────────────────────────────
         faith_prompt = (
             f"Contexte :\n{context}\n\n"
             f"Réponse du système :\n{generated_answer}\n\n"
@@ -126,7 +126,7 @@ def run(n_samples: int | None = None) -> dict[str, Any]:
         )
         faith_score = _safe_float(faith_raw, "faithfulness")
 
-        # ── Double juge : 2e évaluation avec prompt différent ─────────
+        # ── 双评审：使用不同提示词进行第二次评估 ─────────────────────
         faith_prompt2 = (
             f"Contexte :\n{context}\n\n"
             f"Réponse :\n{generated_answer}\n\n"
@@ -139,15 +139,15 @@ def run(n_samples: int | None = None) -> dict[str, Any]:
         )
         faith_score2 = _safe_float(faith_raw2, "faithfulness")
 
-        # ── Checker structuré : décomposition claims + NLI ────────
+        # ── 结构化检查：拆分主张并进行自然语言推断 ──────────────────
         checker_result = compute_faithfulness(generated_answer, context)
         faith_score3 = checker_result["faithfulness"]
 
-        # Moyenne des trois signaux (2 juges + checker)
+        # 取两位评审和结构化检查器三个分数的平均值
         faith_score = round((faith_score + faith_score2 + faith_score3) / 3, 4)
         faithfulness_scores.append(faith_score)
 
-        # ── Étape 3 : Évaluation Answer Relevance ────────────────────────
+        # ── 步骤 3：评估答案相关性 ──────────────────────────────────
         rel_prompt = (
             f"Question : {question}\n\n"
             f"Réponse : {generated_answer}\n\n"
@@ -159,7 +159,7 @@ def run(n_samples: int | None = None) -> dict[str, Any]:
         rel_score = _safe_float(rel_raw, "relevance_score")
         relevance_scores.append(rel_score)
 
-        # ── Étape 4 : Évaluation Context Precision ───────────────────────
+        # ── 步骤 4：评估上下文精确率 ────────────────────────────────
         ctx_prompt = (
             f"Question : {question}\n\n"
             f"Contexte fourni :\n{context}\n\n"

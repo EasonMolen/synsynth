@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-Variance inter-runs de la self-consistency (D2).
+自一致性实验（D2）的多次运行方差。
 
-Lance R runs indépendants de l'expérience D2 (k réponses × T>0 → vote)
-pour chaque modèle, puis calcule mean ± std sur les métriques agrégées.
+对每个模型独立运行 R 次 D2 实验（在 T>0 时生成 k 个答案并投票），
+再计算汇总指标的均值和标准差。
 
-Réutilise les fonctions de self_consistency.py.
+复用 self_consistency.py 中的函数。
 
-Usage :
-    # Préparer 5 runs pour les 3 modèles (peut reprendre si interrompu)
+用法：
+    # 对三个模型各运行五次；中断后可继续
     python scripts/variance_self_consistency.py --runs 5
 
-    # Un seul modèle, 3 runs
+    # 对单个模型运行三次
     python scripts/variance_self_consistency.py --runs 3 --models gpt-oss:20b
 
-    # Analyser les résultats sans relancer (si tous les runs existent)
+    # 如果所有结果已存在，只做分析而不重新运行
     python scripts/variance_self_consistency.py --runs 5 --analyze-only
 
-    # Le run 0 réutilise les données D2 existantes (pas de recalcul)
+    # 第零次运行复用已有的 D2 数据，无需重新计算
 """
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ from synsynth_stats import token_f1
 VARIANCE_DIR = os.path.join(WORKSPACE, "results", "self_consistency", "variance")
 
 
-# ── Chemin par run ──────────────────────────────────────────────────────────
+# ── 各次运行的文件路径 ──────────────────────────────────────────────────
 
 def _run_path(model: str, k: int, run: int) -> str:
     safe = model.replace(":", "_").replace("/", "_")
@@ -61,17 +61,17 @@ def _run_path(model: str, k: int, run: int) -> str:
 
 
 def _original_path(model: str, k: int) -> str:
-    """Chemin des résultats D2 originaux (run 0)."""
+    """返回第零次运行所用的原始 D2 结果路径。"""
     safe = model.replace(":", "_").replace("/", "_")
     return os.path.join(RESULTS_DIR, f"sc_{safe}_k{k}.json")
 
 
-# ── Évaluation d'un run ────────────────────────────────────────────────────
+# ── 评估单次运行 ────────────────────────────────────────────────────────
 
 def evaluate_run(model: str, questions: list[dict],
                  facts_by_idx: dict[int, list[str]],
                  k: int, temperature: float, run: int) -> dict:
-    """Évalue un run complet de self-consistency, avec checkpoint."""
+    """评估完整的一次自一致性运行，并保存检查点。"""
     os.makedirs(VARIANCE_DIR, exist_ok=True)
     ckpt_path = _run_path(model, k, run)
 
@@ -108,7 +108,7 @@ def evaluate_run(model: str, questions: list[dict],
             {"role": "user", "content": prompt},
         ]
 
-        # k appels indépendants avec T > 0
+        # 在 T>0 时独立调用 k 次
         parsed_answers = []
         for ki in range(k):
             raw = ollama_chat(model, messages,
@@ -183,10 +183,10 @@ def _compile_run(details: list[dict], model: str,
     }
 
 
-# ── Copie du run 0 depuis D2 existant ──────────────────────────────────────
+# ── 从已有 D2 结果复制第零次运行 ───────────────────────────────────
 
 def seed_run0(models: list[str], k: int) -> None:
-    """Copie les résultats D2 existants comme run 0."""
+    """将已有的 D2 结果复制为第零次运行。"""
     os.makedirs(VARIANCE_DIR, exist_ok=True)
     for model in models:
         src = _original_path(model, k)
@@ -195,7 +195,7 @@ def seed_run0(models: list[str], k: int) -> None:
             continue
         if os.path.exists(src):
             shutil.copy2(src, dst)
-            # Ajouter le champ run
+            # 添加运行编号字段
             with open(dst) as f:
                 data = json.load(f)
             data["run"] = 0
@@ -206,7 +206,7 @@ def seed_run0(models: list[str], k: int) -> None:
             print(f"  [WARN] Pas de résultat D2 pour {model}")
 
 
-# ── Analyse de variance ────────────────────────────────────────────────────
+# ── 方差分析 ────────────────────────────────────────────────────────────
 
 def _mean(xs: list[float]) -> float:
     return sum(xs) / len(xs) if xs else 0.0
@@ -220,19 +220,19 @@ def _std(xs: list[float]) -> float:
 
 
 def _ci95(xs: list[float]) -> float:
-    """Demi-largeur de l'IC 95% (t-distribution approx)."""
+    """计算 95% 置信区间的半宽度，使用 t 分布近似。"""
     if len(xs) < 2:
         return 0.0
-    # t_{0.025} pour n-1 ddl (approx pour n=3..10)
+    # t_{0.025} 对应 n-1 个自由度；n=3 到 10 时使用近似值
     t_vals = {2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
               6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262}
     df = len(xs) - 1
-    t = t_vals.get(df, 1.96)  # fallback z=1.96
+    t = t_vals.get(df, 1.96)  # 找不到 t 值时使用 z=1.96
     return t * _std(xs) / math.sqrt(len(xs))
 
 
 def analyze_variance(models: list[str], k: int, n_runs: int) -> dict:
-    """Analyse la variance inter-runs et retourne le résumé."""
+    """分析多次运行之间的方差并返回摘要。"""
     print(f"\n{'='*80}")
     print(f"ANALYSE DE VARIANCE — {n_runs} runs, k={k}")
     print(f"{'='*80}\n")
@@ -271,14 +271,13 @@ def analyze_variance(models: list[str], k: int, n_runs: int) -> dict:
                 "max": round(max(vals), 4),
             }
 
-        # Stabilité per-question: pour chaque question, combien de runs
-        # donnent la même réponse (EM) ?
+        # 逐题稳定性：有多少次运行给出相同的完全匹配结果？
         n_questions = runs_data[0]["n"]
         question_stability = []
         for qi in range(n_questions):
             ems = [d["details"][qi]["em_voted"] for d in runs_data
                    if qi < len(d.get("details", []))]
-            # Fraction de runs qui ont la même réponse EM que la majorité
+            # 与多数结果一致的运行所占比例
             if ems:
                 correct_count = sum(ems)
                 stability = max(correct_count, len(ems) - correct_count) / len(ems)
@@ -297,7 +296,7 @@ def analyze_variance(models: list[str], k: int, n_runs: int) -> dict:
         }
         summary[model] = model_summary
 
-        # Affichage
+        # 展示结果
         print(f"  {model} ({len(runs_data)} runs)")
         print(f"  {'─'*50}")
         if em_base is not None:
@@ -311,10 +310,10 @@ def analyze_variance(models: list[str], k: int, n_runs: int) -> dict:
         print(f"  Question stability: {_mean(question_stability):.2%}")
         print()
 
-    # Table récapitulative LaTeX-ready
+    # 可直接用于 LaTeX 的汇总表
     print_latex_table(summary)
 
-    # Sauvegarder
+    # 保存
     out_path = os.path.join(VARIANCE_DIR, "variance_summary.json")
     with open(out_path, 'w') as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
@@ -324,7 +323,7 @@ def analyze_variance(models: list[str], k: int, n_runs: int) -> dict:
 
 
 def print_latex_table(summary: dict) -> None:
-    """Affiche la table de variance au format LaTeX."""
+    """以 LaTeX 格式显示方差表。"""
     print("% --- Table variance inter-runs (copier dans l'article) ---")
     print(r"\begin{table}[ht]")
     print(r"\centering")
@@ -355,11 +354,11 @@ def print_latex_table(summary: dict) -> None:
     print(r"\end{table}")
 
 
-# ── Estimation du temps ────────────────────────────────────────────────────
+# ── 运行时间估算 ────────────────────────────────────────────────────────
 
 def estimate_time(models: list[str], k: int, n_runs: int,
                   n_questions: int = 181) -> None:
-    """Estime le temps total en se basant sur les runs existants."""
+    """根据已有运行结果估算总耗时。"""
     existing = 0
     missing = 0
     for model in models:
@@ -375,7 +374,7 @@ def estimate_time(models: list[str], k: int, n_runs: int,
 
     calls_per_run = n_questions * k  # 181 × 5 = 905
     total_calls = missing * calls_per_run
-    # ~3s par appel Ollama (estimation)
+    # 估计每次 Ollama 调用约需三秒
     secs = total_calls * 3
     hours = secs / 3600
 
@@ -387,7 +386,7 @@ def estimate_time(models: list[str], k: int, n_runs: int,
           f"(à ~3s/appel, séquentiel)")
 
 
-# ── Main ───────────────────────────────────────────────────────────────────
+# ── 主流程 ─────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -409,7 +408,7 @@ def main():
     print(f"D2 Variance inter-runs — R={args.runs}, k={args.k}, T={args.temp}")
     print(f"Modèles : {args.models}")
 
-    # Run 0 = copie des données D2 existantes
+    # 第零次运行复用已有的 D2 数据
     seed_run0(args.models, args.k)
 
     if args.estimate:
@@ -420,7 +419,7 @@ def main():
         analyze_variance(args.models, args.k, args.runs)
         return
 
-    # Charger les données une seule fois
+    # 只加载一次数据
     questions = load_difficult_questions()
     print(f"Questions difficiles : {len(questions)}")
     print("Chargement des faits de support…")
@@ -429,13 +428,13 @@ def main():
 
     estimate_time(args.models, args.k, args.runs, len(questions))
 
-    # Lancer les runs 1..R-1 (run 0 = D2 original déjà copié)
+    # 运行第 1 到 R-1 次；第零次已从原始 D2 结果复制
     for run in range(1, args.runs):
         for model in args.models:
             evaluate_run(model, questions, facts_by_idx,
                          k=args.k, temperature=args.temp, run=run)
 
-    # Analyse finale
+    # 最终分析
     analyze_variance(args.models, args.k, args.runs)
 
 

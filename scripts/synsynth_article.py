@@ -1,8 +1,7 @@
 """
-Génération de l'article scientifique à partir des résultats expérimentaux.
+根据实验结果生成论文。
 
-Le modèle Gemma-4 rédige un article structuré en Markdown / LaTeX
-en s'appuyant sur les métriques collectées.
+Gemma-4 根据收集到的指标，撰写 Markdown / LaTeX 格式的结构化文章。
 """
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ from synsynth_io import read_text, write_text
 
 
 def _build_results_summary(all_results: dict[str, Any]) -> str:
-    """Construit un résumé textuel des résultats pour le prompt."""
+    """将实验结果整理成供模型使用的文字摘要。"""
     lines = []
 
     ext = all_results.get("extraction", {})
@@ -61,7 +60,7 @@ def _build_results_summary(all_results: dict[str, Any]) -> str:
 
 
 def _read_source_docs() -> str:
-    """Lit les documents sources du projet."""
+    """读取项目的源文档。"""
     parts = []
     try:
         parts.append("### Document 1 : Cahier des charges\n" + read_text("SYNSYNTH.md"))
@@ -132,7 +131,7 @@ ARTICLE_SECTIONS = [
 
 
 def generate_article(all_results: dict[str, Any]) -> str:
-    """Génère l'article complet section par section."""
+    """逐节生成完整文章。"""
     logger.info("=== Génération de l'article scientifique ===")
 
     results_summary = _build_results_summary(all_results)
@@ -176,13 +175,13 @@ def generate_article(all_results: dict[str, Any]) -> str:
     elapsed = time.time() - t0
     logger.info("Article complet généré en %.1fs.", elapsed)
 
-    # Assemblage
+    # 合并各节内容
     full_article = "\n\n---\n\n".join(article_parts)
 
-    # Sauvegarde
+    # 保存文章
     write_text("article/SYNSYNTH_article.md", full_article)
 
-    # Sauvegarde aussi des résultats bruts en JSON
+    # 同时将原始结果保存为 JSON
     results_json = json.dumps(all_results, ensure_ascii=False, indent=2, default=str)
     write_text("results/all_results.json", results_json)
 

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-D2 — Self-consistency intra-modèle (Wang et al. 2023).
+D2：模型内部自一致性实验（Wang 等，2023）。
 
-Pour chaque modèle, génère k=5 réponses avec T>0, puis vote majoritaire.
-Compare avec le vote inter-modèles (H6) et le single-run T≈0.
+每个模型在温度 T>0 时生成 k=5 个答案，再进行多数投票。
+结果与跨模型投票（H6）及 T≈0 的单次运行比较。
 
-Usage :
-    python scripts/self_consistency.py                        # top 3 modèles
-    python scripts/self_consistency.py --models phi4:latest    # un seul
-    python scripts/self_consistency.py --k 3 --temp 0.5       # params
+用法：
+    python scripts/self_consistency.py                        # 排名前三的模型
+    python scripts/self_consistency.py --models phi4:latest    # 单个模型
+    python scripts/self_consistency.py --k 3 --temp 0.5       # 自定义参数
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ import urllib.request
 import urllib.error
 from collections import Counter
 
-# ── Chemins ────────────────────────────────────────────────────────────────
+# ── 路径 ────────────────────────────────────────────────────────────────
 WORKSPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIFFICULT_PATH = os.path.join(WORKSPACE, "results", "model_selection",
                               "difficult_questions.json")
@@ -33,20 +33,20 @@ SCRIPTS_DIR = os.path.join(WORKSPACE, "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 from synsynth_stats import token_f1
 
-# ── Configuration ──────────────────────────────────────────────────────────
+# ── 配置 ────────────────────────────────────────────────────────────────
 OLLAMA_BASE = "http://127.0.0.1:11434"
 TIMEOUT = 600
 DEFAULT_K = 5
 DEFAULT_TEMP = 0.7
 
-# Top 3 modèles du benchmark (meilleur EM sur les 181 difficiles)
+# 基准测试中 181 道难题完全匹配率最高的三个模型
 DEFAULT_MODELS = [
-    "gpt-oss:20b",           # EM=0.1768 — meilleur
+    "gpt-oss:20b",           # EM=0.1768，表现最佳
     "phi4-reasoning:plus",   # EM=0.1657
     "phi4:latest",           # EM=0.1326
 ]
 
-# ── System prompt (identique au benchmark) ─────────────────────────────────
+# ── 系统提示词，与基准测试一致 ────────────────────────────────────────
 SYSTEM_PROMPT = (
     "Tu es un agent de raisonnement multi-hop. "
     "Tu reçois une question complexe et des faits de support. "
@@ -71,7 +71,7 @@ SYSTEM_PROMPT = (
 )
 
 
-# ── Appel Ollama ────────────────────────────────────────────────────────────
+# ── 调用 Ollama ─────────────────────────────────────────────────────────
 
 def ollama_chat(model: str, messages: list[dict],
                 temperature: float = 0.7,
@@ -106,7 +106,7 @@ def ollama_chat(model: str, messages: list[dict],
         return ""
 
 
-# ── Parsing (identique benchmark) ──────────────────────────────────────────
+# ── 解析回答，与基准测试一致 ──────────────────────────────────────────
 
 def _strip_markdown(raw: str) -> str:
     m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw, re.DOTALL)
@@ -169,7 +169,7 @@ def parse_response(raw: str) -> dict | None:
     return {"answer": answer, "reasoning_chain": []}
 
 
-# ── Matching (identique benchmark) ─────────────────────────────────────────
+# ── 答案匹配，与基准测试一致 ──────────────────────────────────────────
 
 def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip().lower())
@@ -185,16 +185,16 @@ def answer_match(pred: str, gold: str) -> bool:
     return False
 
 
-# ── Vote majoritaire ───────────────────────────────────────────────────────
+# ── 多数投票 ────────────────────────────────────────────────────────────
 
 def majority_vote(answers: list[str]) -> str:
-    """Vote majoritaire avec normalisation."""
+    """对归一化后的答案进行多数投票。"""
     if not answers:
         return ""
     normalized = [_normalize(a) for a in answers]
     counts = Counter(normalized)
     winner = counts.most_common(1)[0][0]
-    # Retourner la version originale
+    # 返回票数最高答案的原始写法
     for a, n in zip(answers, normalized):
         if n == winner:
             return a
@@ -202,7 +202,7 @@ def majority_vote(answers: list[str]) -> str:
 
 
 def vote_agreement(answers: list[str]) -> float:
-    """Fraction des réponses identiques au vote."""
+    """计算与投票结果相同的答案比例。"""
     if not answers:
         return 0.0
     winner = _normalize(majority_vote(answers))
@@ -210,7 +210,7 @@ def vote_agreement(answers: list[str]) -> float:
     return sum(1 for n in normalized if n == winner) / len(normalized)
 
 
-# ── Données ────────────────────────────────────────────────────────────────
+# ── 数据 ────────────────────────────────────────────────────────────────
 
 def load_difficult_questions() -> list[dict]:
     with open(DIFFICULT_PATH) as f:
@@ -224,7 +224,7 @@ def load_supporting_facts() -> dict[int, list[str]]:
 
 
 def load_baseline_results(model: str) -> dict | None:
-    """Charge les résultats single-run du benchmark pour comparaison."""
+    """加载基准测试的单次运行结果用于比较。"""
     safe = model.replace(":", "_").replace("/", "_")
     path = os.path.join(BENCHMARK_DIR, f"benchmark_{safe}.json")
     if os.path.exists(path):
@@ -233,7 +233,7 @@ def load_baseline_results(model: str) -> dict | None:
     return None
 
 
-# ── Évaluation self-consistency ────────────────────────────────────────────
+# ── 自一致性评估 ────────────────────────────────────────────────────────
 
 def evaluate_self_consistency(model: str, questions: list[dict],
                               facts_by_idx: dict[int, list[str]],
@@ -273,7 +273,7 @@ def evaluate_self_consistency(model: str, questions: list[dict],
             {"role": "user", "content": prompt},
         ]
 
-        # k appels avec T > 0
+        # 在 T>0 时独立调用 k 次
         raw_answers = []
         parsed_answers = []
         for ki in range(k):
@@ -282,10 +282,10 @@ def evaluate_self_consistency(model: str, questions: list[dict],
                               json_format=True)
             pred = parse_response(raw)
             ans = pred["answer"] if pred else ""
-            raw_answers.append(raw[:500])  # tronquer pour stockage
+            raw_answers.append(raw[:500])  # 截断以便存储
             parsed_answers.append(ans)
 
-        # Vote majoritaire
+        # 多数投票
         voted = majority_vote(parsed_answers)
         agreement = vote_agreement(parsed_answers)
 
@@ -293,7 +293,7 @@ def evaluate_self_consistency(model: str, questions: list[dict],
         em_voted = answer_match(voted, gold)
         f1_voted = token_f1(voted, gold)
 
-        # EM par réponse individuelle (pour comparer)
+        # 为便于比较，计算每个单独答案的完全匹配率
         individual_ems = [answer_match(a, gold) for a in parsed_answers]
         any_correct = any(individual_ems)
         all_correct = all(individual_ems)
@@ -340,7 +340,7 @@ def _compile_results(details: list[dict], model: str,
     oracle_k = sum(1 for d in details if d["any_correct"]) / n
     agree_avg = sum(d["agreement"] for d in details) / n
 
-    # Accord parfait = toutes les réponses identiques
+    # 完全一致表示所有答案相同
     perfect_agree = sum(1 for d in details if d["agreement"] == 1.0) / n
 
     return {
@@ -357,7 +357,7 @@ def _compile_results(details: list[dict], model: str,
     }
 
 
-# ── Synthèse comparative ──────────────────────────────────────────────────
+# ── 比较汇总 ──────────────────────────────────────────────────────────
 
 def print_comparison(results: list[dict]):
     print("\n" + "="*80)
@@ -380,7 +380,7 @@ def print_comparison(results: list[dict]):
               f"{delta:>6} {r['oracle_k']:.4f} {r['agreement_avg']:.2f}")
 
     print()
-    # Charger le vote inter-modèles (H6) pour comparaison
+    # 加载跨模型投票结果（H6）进行比较
     h6_path = os.path.join(BENCHMARK_DIR, "benchmark_summary_difficult.json")
     if os.path.exists(h6_path):
         with open(h6_path) as f:
@@ -417,7 +417,7 @@ def save_summary(results: list[dict]):
     print(f"\nSummary → {path}")
 
 
-# ── Main ───────────────────────────────────────────────────────────────────
+# ── 主流程 ─────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="D2: Self-consistency intra-modèle")

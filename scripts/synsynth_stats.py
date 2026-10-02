@@ -1,5 +1,5 @@
 """
-Utilitaires statistiques pour SYNSYNTH+ — Bootstrap CI et métriques avancées.
+SYNSYNTH+ 统计工具：Bootstrap 置信区间及其他指标。
 """
 from __future__ import annotations
 
@@ -15,9 +15,9 @@ def bootstrap_ci(
     confidence: float = 0.95,
     seed: int = RANDOM_SEED,
 ) -> dict:
-    """Calcule la moyenne et l'intervalle de confiance par bootstrap.
+    """使用 Bootstrap 计算均值及置信区间。
 
-    Returns:
+    返回：
         {"mean": float, "ci_low": float, "ci_high": float, "std": float}
     """
     if not scores:
@@ -46,7 +46,7 @@ def bootstrap_ci(
 
 
 def token_f1(pred: str, gold: str) -> float:
-    """Calcule le F1 token-level (métrique standard HotpotQA)."""
+    """计算词元级 F1（HotpotQA 标准指标）。"""
     pred_tokens = _normalize_tokens(pred)
     gold_tokens = _normalize_tokens(gold)
 
@@ -65,10 +65,10 @@ def token_f1(pred: str, gold: str) -> float:
 
 
 def _normalize_tokens(text: str) -> list[str]:
-    """Tokenise et normalise pour le calcul de F1."""
+    """分词并归一化，以计算 F1。"""
     import re
     text = text.lower().strip()
-    # Retirer articles courants (en/fr)
+    # 去除英语和法语中的常见冠词
     text = re.sub(r"\b(the|a|an|le|la|les|un|une|des|l'|d')\b", " ", text)
     tokens = text.split()
     return [t for t in tokens if t]

@@ -1,38 +1,43 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════════════════╗
-║                   SYNSYNTH+ — Pipeline Expérimental                ║
+║                   SYNSYNTH+ — 实验流程                               ║
 ║                                                                      ║
-║  Modèle  : unsloth/gemma-4-26B-A4B-it-GGUF  (UD-Q4_K_XK)          ║
-║  Objectif : Évaluation 4 axes + Génération d'article scientifique   ║
-║  Sandbox  : Toutes les I/O sont confinées dans PJKG4/               ║
+║  模型    : unsloth/gemma-4-26B-A4B-it-GGUF  (UD-Q4_K_XK)          ║
+║  目标    : 四项实验评估与论文生成                                      ║
+║  工作区  : 所有文件读写都限制在本项目目录中                            ║
 ╚══════════════════════════════════════════════════════════════════════╝
 
-Usage :
-    python run_synsynth.py                   # pipeline complet
-    python run_synsynth.py --self-improve    # pipeline + boucle d'auto-amélioration
-    python run_synsynth.py --exp extraction  # une seule expérience
-    python run_synsynth.py --article-only    # rédaction seule (résultats existants)
-    python run_synsynth.py --n-samples 20    # nombre d'échantillons réduit (test rapide)
+用法：
+    python run_synsynth.py                   # 运行完整流程
+    python run_synsynth.py --self-improve    # 完整流程加自改进循环（需要缺失的外部模块）
+    python run_synsynth.py --exp extraction  # 只运行一个实验
+    python run_synsynth.py --article-only    # 根据已有结果生成文章
+    python run_synsynth.py --n-samples 20    # 减少样本数，快速测试
 """
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import sys
 import time
 
-# ── Sécurité : s'assurer que le CWD est bien dans le workspace ─────────────
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
+
+# ── 安全：确保当前工作目录位于项目内 ───────────────────────────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-WORKSPACE = os.path.dirname(_SCRIPT_DIR)  # projet = parent de scripts/
+WORKSPACE = os.path.dirname(_SCRIPT_DIR)  # 项目目录是 scripts/ 的上一级
 os.chdir(WORKSPACE)
 
-# Ajouter le dossier scripts/ au path pour les imports internes
+# 将 scripts/ 加入模块搜索路径，供项目内部导入使用
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-# Empêcher toute évasion par variable d'environnement
+# 将缓存目录限制在项目内
 os.environ["HF_HOME"] = os.path.join(WORKSPACE, "cache", "huggingface")
 os.environ["TRANSFORMERS_CACHE"] = os.path.join(WORKSPACE, "cache", "huggingface")
 os.environ["TORCH_HOME"] = os.path.join(WORKSPACE, "cache", "torch")
@@ -45,16 +50,16 @@ from synsynth_config import (
 from synsynth_io import write_json, read_json, write_text
 import synsynth_model
 
-# Flag global pour le mode reprise
+# 断点续跑模式的全局标记
 _RESUME_MODE = False
 
 
 # ============================================================================
-#  Fonctions orchestrateur
+#  流程调度函数
 # ============================================================================
 
 def run_experiment(name: str, n_samples: int | None = None) -> dict:
-    """Importe et exécute dynamiquement une expérience par nom."""
+    """根据名称动态导入并运行实验。"""
     EXPERIMENTS = {
         "extraction":  "exp_extraction",
         "query":       "exp_query",
@@ -62,22 +67,21 @@ def run_experiment(name: str, n_samples: int | None = None) -> dict:
         "rag":         "exp_rag",
     }
     if name not in EXPERIMENTS:
-        raise ValueError(f"Expérience inconnue : {name!r}. Choix : {list(EXPERIMENTS)}")
+        raise ValueError(f"未知实验：{name!r}。可选值：{list(EXPERIMENTS)}")
 
-    # Sélection du meilleur modèle pour cette tâche
+    # 为当前任务选择配置的模型
     model = TASK_MODELS.get(name, DEFAULT_MODEL)
     synsynth_model.OLLAMA_MODEL = model
-    logger.info("Modèle sélectionné pour '%s' : %s", name, model)
+    logger.info("实验 '%s' 使用模型：%s", name, model)
 
     mod = __import__(EXPERIMENTS[name])
     return mod.run(n_samples=n_samples)
 
 
 def run_all_experiments(n_samples: int | None = None) -> dict[str, dict]:
-    """Exécute les 4 expériences séquentiellement.
+    """依次运行四项实验。
 
-    En mode --resume, les expériences déjà terminées (fichier résultat
-    existant avec le bon n_samples) sont sautées.
+    使用 --resume 时，跳过已有结果文件的实验。
     """
     results = {}
     exp_names = ["extraction", "query", "multihop", "rag"]
@@ -91,55 +95,55 @@ def run_all_experiments(n_samples: int | None = None) -> dict[str, dict]:
     for name in exp_names:
         logger.info("━" * 60)
 
-        # En mode resume, vérifier si un résultat complet existe déjà
+        # 续跑时检查是否已有完整结果
         if _RESUME_MODE:
             result_key = exp_result_keys[name]
             result_path = os.path.join(RESULTS_DIR, f"{result_key}.json")
             if os.path.exists(result_path):
                 existing = read_json(f"results/{result_key}.json")
                 if existing and "error" not in existing:
-                    logger.info("⏭  Expérience '%s' déjà terminée (résultat existant) — sautée.", name)
+                    logger.info("⏭  实验 '%s' 已有结果，跳过。", name)
                     results[result_key] = existing
                     continue
 
         try:
             res = run_experiment(name, n_samples=n_samples)
             results[res.get("experiment", name)] = res
-            # Sauvegarde incrémentale
+            # 每完成一项实验就保存结果
             write_json(
                 f"results/{res.get('experiment', name)}.json",
                 res,
             )
         except Exception as e:
-            logger.error("Échec de l'expérience '%s' : %s", name, e, exc_info=True)
+            logger.error("实验 '%s' 失败：%s", name, e, exc_info=True)
             results[name] = {"experiment": name, "error": str(e)}
 
     return results
 
 
 def generate_article(all_results: dict) -> str:
-    """Appelle le module de rédaction."""
+    """调用文章生成模块。"""
     from synsynth_article import generate_article as _gen
     return _gen(all_results)
 
 
 def generate_visualizations(all_results: dict) -> list[str]:
-    """Appelle le module de visualisation."""
+    """调用可视化模块。"""
     try:
         from synsynth_viz import plot_summary
         return plot_summary(all_results)
     except ImportError as e:
-        logger.warning("Visualisation indisponible (matplotlib?) : %s", e)
+        logger.warning("无法生成图表（可能缺少 matplotlib）：%s", e)
         return []
 
 
 def load_existing_results() -> dict:
-    """Charge les résultats précédemment sauvegardés."""
+    """加载之前保存的结果。"""
     p = os.path.join(RESULTS_DIR, "all_results.json")
     if os.path.exists(p):
         rel = os.path.relpath(p, WORKSPACE)
         return read_json(rel)
-    # Charger les fichiers individuels
+    # 加载各实验单独保存的文件
     results = {}
     for fname in os.listdir(RESULTS_DIR):
         if fname.endswith(".json") and fname != "all_results.json":
@@ -151,126 +155,137 @@ def load_existing_results() -> dict:
 
 
 # ============================================================================
-#  Point d'entrée
+#  程序入口
 # ============================================================================
 
 def main():
     parser = argparse.ArgumentParser(
-        description="SYNSYNTH+ — Pipeline expérimental avec Gemma-4-26B",
+        description="SYNSYNTH+：基于本地模型的实验流程",
     )
     parser.add_argument(
         "--exp", type=str, default=None,
         choices=["extraction", "query", "multihop", "rag"],
-        help="Exécuter une seule expérience (par défaut : toutes).",
+        help="只运行指定实验；默认运行全部实验。",
     )
     parser.add_argument(
         "--article-only", action="store_true",
-        help="Générer l'article à partir de résultats existants.",
+        help="根据已有实验结果生成文章。",
     )
     parser.add_argument(
         "--viz-only", action="store_true",
-        help="Générer uniquement les visualisations.",
+        help="只生成可视化图表。",
     )
     parser.add_argument(
         "--n-samples", type=int, default=None,
-        help="Nombre d'échantillons par expérience (défaut : config).",
+        help="每项实验的样本数；默认使用配置值。",
     )
     parser.add_argument(
         "--skip-article", action="store_true",
-        help="Exécuter les expériences sans générer l'article.",
+        help="运行实验，但不生成文章。",
     )
     parser.add_argument(
         "--self-improve", action="store_true",
-        help="Activer la boucle d'auto-amélioration (Gemma-4 corrige ses scripts).",
+        help="启用自改进循环；需要仓库中缺失的 synsynth_selfimprove.py。",
     )
     parser.add_argument(
         "--max-improve-iter", type=int, default=3,
-        help="Nombre max d'itérations d'auto-amélioration par expérience (défaut : 3).",
+        help="每项实验最多执行的自改进次数；默认 3 次。",
     )
     parser.add_argument(
         "--resume", action="store_true",
-        help="Reprendre le pipeline : saute les expériences terminées et reprend les checkpoints.",
+        help="继续上次运行：跳过已完成的实验，并读取检查点。",
     )
     parser.add_argument(
         "--gbnf", action="store_true",
-        help="Activer le décodage contraint par JSON Schema (GBNF) via PJKG5.",
+        help="启用 GBNF 约束解码；需要外部 gbnf_patch.py（默认位于相邻的 PJKG5 目录）。",
+    )
+    parser.add_argument(
+        "--gbnf-patch-dir", type=str, default=None,
+        help="gbnf_patch.py 所在目录；仅与 --gbnf 一起使用。",
     )
     parser.add_argument(
         "--seed", type=int, default=None,
-        help="Graine aléatoire (défaut : 42). Permet de mesurer la variance inter-runs.",
+        help="随机种子；默认 42。可用于测量不同运行之间的方差。",
     )
     parser.add_argument(
         "--model", type=str, default=None,
-        help="Forcer un modèle Ollama pour toutes les tâches (ex: llama3.1:8b). "
-             "Utile pour les baselines comparatives.",
+        help="所有任务都使用指定的 Ollama 模型，例如 llama3.1:8b；用于基线比较。",
     )
     parser.add_argument(
         "--qlora", action="store_true",
-        help="Activer le fine-tuning QLoRA (Phase 2b). Entraîne les modèles "
-             "sur Re-DocRED/HotpotQA puis évalue avec inférence HuggingFace. "
-             "Résultats sauvegardés avec suffixe _qlora.",
+        help="启用 QLoRA 微调（阶段 2b）：在 Re-DocRED/HotpotQA 上训练，"
+             "通过 Hugging Face 推理评估，结果名称以 _qlora 结尾。",
     )
     parser.add_argument(
         "--qlora-base-model", type=str, default=None,
-        help="Modèle HuggingFace de base pour QLoRA "
-             "(défaut : Qwen/Qwen2.5-7B-Instruct).",
+        help="QLoRA 的 Hugging Face 基础模型；默认 Qwen/Qwen2.5-7B-Instruct。",
     )
     args = parser.parse_args()
 
     logger.info("╔══════════════════════════════════════════════════════════╗")
-    logger.info("║           SYNSYNTH+ — Démarrage du pipeline             ║")
+    logger.info("║              SYNSYNTH+ 实验流程启动                      ║")
     logger.info("╚══════════════════════════════════════════════════════════╝")
-    logger.info("Workspace : %s", WORKSPACE)
+    logger.info("工作区：%s", WORKSPACE)
 
-    # ── Seed aléatoire ─────────────────────────────────────────────────
+    # ── 随机种子 ──────────────────────────────────────────────────────
     if args.seed is not None:
         import synsynth_config
         synsynth_config.RANDOM_SEED = args.seed
         import random
         random.seed(args.seed)
-        logger.info("Seed aléatoire fixée à %d", args.seed)
+        logger.info("随机种子设为 %d", args.seed)
 
-    # ── Modèle forcé (baselines) ───────────────────────────────────────
+    # ── 为基线实验强制指定模型 ───────────────────────────────────────
     if args.model:
         for key in TASK_MODELS:
             TASK_MODELS[key] = args.model
-        logger.info("Modèle forcé pour toutes les tâches : %s", args.model)
+        logger.info("全部任务使用模型：%s", args.model)
 
-    # Activer le mode reprise si demandé
+    # 按需启用断点续跑
     global _RESUME_MODE
     if args.resume:
         _RESUME_MODE = True
-        logger.info("Mode REPRISE activé — les expériences terminées seront sautées.")
+        logger.info("已启用断点续跑；跳过已完成实验。")
 
-    # Activer le décodage contraint GBNF si demandé
+    # 按需启用 GBNF 约束解码；补丁来自外部项目
     if args.gbnf:
-        pjkg5 = os.path.join(os.path.dirname(WORKSPACE), "PJKG5")
-        if pjkg5 not in sys.path:
-            sys.path.insert(0, pjkg5)
-        from gbnf_patch import patch_model_module, set_task
+        patch_dir = os.path.abspath(
+            args.gbnf_patch_dir or os.path.join(os.path.dirname(WORKSPACE), "PJKG5")
+        )
+        patch_file = os.path.join(patch_dir, "gbnf_patch.py")
+        if not os.path.isfile(patch_file):
+            parser.error(
+                f"--gbnf 需要外部文件 {patch_file}。"
+                "请提供 --gbnf-patch-dir，或不使用 --gbnf。"
+            )
+        if patch_dir not in sys.path:
+            sys.path.insert(0, patch_dir)
+        gbnf_patch = importlib.import_module("gbnf_patch")
+        patch_model_module = gbnf_patch.patch_model_module
+        set_task = gbnf_patch.set_task
         patch_model_module()
-        # Envelopper run_experiment pour injecter set_task() avant chaque exp
+        # 包装实验函数，在每次实验前设置 GBNF 任务
         _original_run_experiment = run_experiment
         def _gbnf_run_experiment(name, n_samples=None):
             set_task(name)
             return _original_run_experiment(name, n_samples=n_samples)
         globals()['run_experiment'] = _gbnf_run_experiment
-        logger.info("Décodage contraint GBNF activé (JSON Schema strict).")
+        logger.info("已启用 GBNF 约束解码（严格 JSON Schema）。")
 
-    # Activer le QLoRA si demandé
+    # 按需启用 QLoRA
     if args.qlora:
         from qlora_finetune import (
             finetune, has_finetuned_model, patch_inference, unpatch_inference,
             QLORA_TASKS,
         )
 
-        # 1. Entraîner les modèles si nécessaire
+        # 1. 如有需要，训练模型
         for _task in QLORA_TASKS:
             if not has_finetuned_model(_task):
-                logger.info("Entraînement QLoRA pour '%s'...", _task)
+                logger.info("正在为 '%s' 训练 QLoRA...", _task)
                 finetune(_task, base_model=args.qlora_base_model)
 
-        # 2. Envelopper run_experiment pour patcher l'inférence par tâche
+        # 2. 包装实验函数，按任务切换推理实现
         _prev_run_experiment_qlora = globals()['run_experiment']
 
         def _qlora_run_experiment(name, n_samples=None):
@@ -280,7 +295,7 @@ def main():
                     res = _prev_run_experiment_qlora(name, n_samples=n_samples)
                 finally:
                     unpatch_inference()
-                # Tagguer le résultat comme QLoRA
+                # 标记 QLoRA 实验结果
                 original_exp = res.get("experiment", name)
                 res["experiment"] = original_exp + "_qlora"
                 res["method"] = "qlora"
@@ -290,36 +305,38 @@ def main():
                 return _prev_run_experiment_qlora(name, n_samples=n_samples)
 
         globals()['run_experiment'] = _qlora_run_experiment
-        logger.info("QLoRA activé pour : %s", QLORA_TASKS)
+        logger.info("已为以下任务启用 QLoRA：%s", QLORA_TASKS)
 
     t_global = time.time()
 
-    # ── Mode article seul ──────────────────────────────────────────────
+    # ── 仅生成文章 ────────────────────────────────────────────────────
     if args.article_only:
         all_results = load_existing_results()
         if not all_results:
-            logger.error("Aucun résultat trouvé. Lancez d'abord les expériences.")
+            logger.error("找不到实验结果，请先运行实验。")
             sys.exit(1)
         generate_article(all_results)
-        logger.info("Article généré → article/SYNSYNTH_article.md")
+        logger.info("文章已生成 → article/SYNSYNTH_article.md")
         return
 
-    # ── Mode visualisation seule ───────────────────────────────────────
+    # ── 仅生成图表 ────────────────────────────────────────────────────
     if args.viz_only:
         all_results = load_existing_results()
         if not all_results:
-            logger.error("Aucun résultat trouvé.")
+            logger.error("找不到实验结果。")
             sys.exit(1)
         paths = generate_visualizations(all_results)
         for p in paths:
-            logger.info("Figure → %s", p)
+            logger.info("图表 → %s", p)
         return
 
-    # ── Expérience unique ──────────────────────────────────────────────
+    # ── 单项实验 ──────────────────────────────────────────────────────
     if args.exp:
         if args.self_improve:
-            from synsynth_selfimprove import self_improve
-            logger.info("Mode AUTO-AMÉLIORATION pour '%s' (max %d iter).",
+            if not os.path.isfile(os.path.join(_SCRIPT_DIR, "synsynth_selfimprove.py")):
+                parser.error("--self-improve 需要仓库中缺失的 synsynth_selfimprove.py。")
+            self_improve = importlib.import_module("synsynth_selfimprove").self_improve
+            logger.info("实验 '%s' 已启用自改进（最多 %d 次）。",
                         args.exp, args.max_improve_iter)
             res = self_improve(
                 args.exp,
@@ -336,10 +353,12 @@ def main():
             generate_article(all_results)
         return
 
-    # ── Pipeline complet ───────────────────────────────────────────────
+    # ── 完整实验流程 ──────────────────────────────────────────────────
     if args.self_improve:
-        from synsynth_selfimprove import self_improve_all
-        logger.info("Mode AUTO-AMÉLIORATION activé (max %d iter/exp).",
+        if not os.path.isfile(os.path.join(_SCRIPT_DIR, "synsynth_selfimprove.py")):
+            parser.error("--self-improve 需要仓库中缺失的 synsynth_selfimprove.py。")
+        self_improve_all = importlib.import_module("synsynth_selfimprove").self_improve_all
+        logger.info("已启用自改进（每项实验最多 %d 次）。",
                     args.max_improve_iter)
         all_results = self_improve_all(
             run_experiment,
@@ -349,30 +368,30 @@ def main():
     else:
         all_results = run_all_experiments(n_samples=args.n_samples)
 
-    # Sauvegarde globale
+    # 保存全部实验结果
     write_json("results/all_results.json", all_results)
 
-    # Visualisations
+    # 生成图表
     fig_paths = generate_visualizations(all_results)
 
-    # Rédaction de l'article
+    # 生成文章
     if not args.skip_article:
         article = generate_article(all_results)
-        logger.info("Article sauvegardé → article/SYNSYNTH_article.md")
+        logger.info("文章已保存 → article/SYNSYNTH_article.md")
 
-    # ── Rapport final ──────────────────────────────────────────────────
+    # ── 最终报告 ──────────────────────────────────────────────────────
     elapsed_total = time.time() - t_global
     logger.info("━" * 60)
-    logger.info("Pipeline terminé en %.1f s.", elapsed_total)
-    logger.info("Résultats       → results/")
-    logger.info("Figures         → %s", ", ".join(fig_paths) if fig_paths else "(aucune)")
-    logger.info("Article         → article/SYNSYNTH_article.md")
-    logger.info("Logs            → logs/synsynth.log")
+    logger.info("流程耗时 %.1f 秒。", elapsed_total)
+    logger.info("实验结果       → results/")
+    logger.info("图表           → %s", ", ".join(fig_paths) if fig_paths else "（无）")
+    logger.info("文章           → article/SYNSYNTH_article.md")
+    logger.info("日志           → logs/synsynth.log")
 
-    # Résumé chiffré
+    # 汇总各实验指标
     for key, res in all_results.items():
         if "error" in res:
-            logger.warning("  %-25s  ERREUR : %s", key, res["error"])
+            logger.warning("  %-25s  错误：%s", key, res["error"])
         else:
             score = (
                 res.get("f1_score")
@@ -382,7 +401,7 @@ def main():
                 or res.get("avg_token_f1")
                 or "?"
             )
-            logger.info("  %-25s  score = %s", key, score)
+            logger.info("  %-25s  得分 = %s", key, score)
 
 
 if __name__ == "__main__":

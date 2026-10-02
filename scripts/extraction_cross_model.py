@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """
-Test V3 extraction avec les meilleurs modèles du benchmark B1.
+使用 B1 基准测试中的最佳模型运行关系抽取 V3 实验。
 
-Reproduit exactement la logique de exp_extraction.py (mêmes prompts V3,
-system prompt, synonymes, matching) en appelant directement Ollama pour
-chaque modèle. Checkpoint par modèle (pas de conflit).
+复用 exp_extraction.py 的 V3 提示词、系统提示词、同义词和匹配逻辑，
+对每个模型直接调用 Ollama。每个模型使用独立检查点，避免冲突。
 
-Usage :
-    # Tester les 3 meilleurs de B1
+用法：
+    # 测试 B1 排名前三的模型
     python scripts/extraction_cross_model.py
 
-    # Un seul modèle
+    # 测试单个模型
     python scripts/extraction_cross_model.py --models mistral-small:latest
 
-    # Sous-ensemble rapide (test)
+    # 使用较小样本集快速测试
     python scripts/extraction_cross_model.py --n 50
 """
 from __future__ import annotations
@@ -39,14 +38,14 @@ RESULTS_CROSS_DIR = os.path.join(RESULTS_DIR, "extraction_cross_model")
 OLLAMA_BASE = "http://127.0.0.1:11434"
 TIMEOUT = 600
 
-# Meilleurs extracteurs B1 (bruts, sans V3)
+# B1 中表现最好的关系抽取模型（原始结果，未采用 V3）
 TEST_MODELS = [
-    "mistral-small:latest",   # F1=0.666 brut (meilleur B1)
-    "gpt-oss:20b",            # F1=0.659 brut
-    "phi4-reasoning:plus",    # F1=0.656 brut
+    "mistral-small:latest",   # 原始 F1=0.666，B1 中最佳
+    "gpt-oss:20b",            # 原始 F1=0.659
+    "phi4-reasoning:plus",    # 原始 F1=0.656
 ]
 
-# ── Wikidata labels + synonymes (identiques à exp_extraction.py V3) ────────
+# ── Wikidata 标签与同义词，与 exp_extraction.py V3 一致 ──────────────
 _WIKIDATA_LABELS: dict[str, str] = {
     "P6": "head_of_government", "P17": "country", "P19": "place_of_birth",
     "P20": "place_of_death", "P22": "father", "P25": "mother",
@@ -93,7 +92,7 @@ _WIKIDATA_LABELS: dict[str, str] = {
 _VALID_RELATIONS = sorted(set(_WIKIDATA_LABELS.values()))
 _RELATIONS_LIST = ", ".join(_VALID_RELATIONS)
 
-# System prompt V3 (identique à exp_extraction.py)
+# V3 系统提示词，与 exp_extraction.py 一致
 SYSTEM_PROMPT = (
     "You are an expert in Relation Extraction. "
     "Given a text and two named entities (head and tail), "
@@ -112,7 +111,7 @@ SYSTEM_PROMPT = (
     "{\"relation\": \"…\", \"confidence\": 0.0-1.0}"
 )
 
-# Synonymes V3 (identiques à exp_extraction.py)
+# V3 同义词，与 exp_extraction.py 一致
 _SYNONYMS = {
     "start_time": {"year", "date", "start", "start_date", "began", "beginning", "from"},
     "end_time": {"year", "date", "end", "end_date", "ended", "until", "to"},
@@ -149,7 +148,7 @@ _SYNONYMS = {
 }
 
 
-# ── Appel Ollama ────────────────────────────────────────────────────────────
+# ── 调用 Ollama ─────────────────────────────────────────────────────────
 
 def ollama_chat(model: str, messages: list[dict],
                 json_format: bool = False) -> str:
@@ -182,7 +181,7 @@ def ollama_chat(model: str, messages: list[dict],
         return ""
 
 
-# ── Parsing / matching (identiques à exp_extraction.py V3) ─────────────────
+# ── 解析与匹配，与 exp_extraction.py V3 一致 ──────────────────────────
 
 def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip().lower())
@@ -209,7 +208,7 @@ def _parse_response(raw: str) -> dict | None:
 
 
 def _relation_match(pred_rel: str, gold_rel: str) -> bool:
-    """Matching souple V3 : label Wikidata + inclusion + synonymes."""
+    """V3 宽松匹配：Wikidata 标签、子串及同义词。"""
     pred_n = _normalize(pred_rel).replace(" ", "_")
     gold_n = _normalize(gold_rel).replace(" ", "_")
     if pred_n == gold_n:
@@ -232,10 +231,10 @@ def _relation_match(pred_rel: str, gold_rel: str) -> bool:
     return False
 
 
-# ── Évaluation par modèle (avec checkpoint indépendant) ───────────────────
+# ── 逐模型评估，使用独立检查点 ────────────────────────────────────────
 
 def evaluate_model(model: str, data: list[dict]) -> dict:
-    """Évalue un modèle sur l'extraction V3, avec checkpoint par modèle."""
+    """使用该模型运行抽取 V3 评估，并单独保存检查点。"""
     safe = model.replace(":", "_").replace("/", "_")
     os.makedirs(RESULTS_CROSS_DIR, exist_ok=True)
     ckpt_path = os.path.join(RESULTS_CROSS_DIR, f"extraction_{safe}.json")
@@ -267,7 +266,7 @@ def evaluate_model(model: str, data: list[dict]) -> dict:
         gold_rel = sample["relation"]
         gold_label = _WIKIDATA_LABELS.get(gold_rel, gold_rel)
 
-        # Prompt V3 (identique à exp_extraction.py)
+        # V3 提示词，与 exp_extraction.py 一致
         prompt = (
             f"Texte : « {sample['text']} »\n\n"
             f"Entité head : {sample['head']}\n"
@@ -283,7 +282,7 @@ def evaluate_model(model: str, data: list[dict]) -> dict:
         raw = ollama_chat(model, messages, json_format=True)
         pred = _parse_response(raw)
 
-        # Retry une fois
+        # 失败时重试一次
         if pred is None:
             messages_retry = [
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -359,7 +358,7 @@ def _compile(details, model, tp, fp, fn, elapsed):
     }
 
 
-# ── Main ───────────────────────────────────────────────────────────────────
+# ── 主流程 ─────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -379,19 +378,19 @@ def main():
         result = evaluate_model(model, data)
         all_results.append(result)
 
-    # ── Tableau comparatif ─────────────────────────────────────────────
+    # ── 对比表 ────────────────────────────────────────────────────────
     print(f"\n{'='*80}")
     print("COMPARAISON — Extraction V3 cross-model")
     print(f"{'='*80}\n")
 
-    # Charger la baseline gemma4 V3
+    # 加载 gemma4 V3 基线结果
     baseline_path = os.path.join(RESULTS_DIR, "extraction.json")
     baseline = None
     if os.path.exists(baseline_path):
         with open(baseline_path) as f:
             baseline = json.load(f)
 
-    # Charger les résultats B1 bruts
+    # 加载 B1 原始结果
     b1_results = {}
     b1_dir = os.path.join(RESULTS_DIR, "extraction_benchmark")
     if os.path.exists(b1_dir):
@@ -428,7 +427,7 @@ def main():
         print(f"  {model:<25} {p:>7.3f} {rec:>7.3f} {f1:>7.3f} "
               f"{b1_f1:>7.3f} {delta:>7} {elapsed:>7.0f}s")
 
-    # Sauvegarder le résumé
+    # 保存汇总结果
     summary = []
     if baseline:
         summary.append({

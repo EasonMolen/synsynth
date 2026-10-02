@@ -1,12 +1,10 @@
 """
-Jeux de données synthétiques et adaptatifs pour les quatre axes d'évaluation.
+四个评估方向所用的合成与自适应数据集。
 
-Ce module :
-  1. Tente de charger les benchmarks réels (DocRED, TACRED, HotpotQA, etc.)
-     via HuggingFace `datasets`.
-  2. En cas d'indisponibilité, génère des échantillons synthétiques
-     représentatifs à l'aide du modèle Gemma-4 lui-même.
-  3. Cache tout dans  data/  pour reproductibilité.
+本模块：
+  1. 尝试通过 Hugging Face `datasets` 加载 DocRED、TACRED、HotpotQA 等真实基准数据。
+  2. 如果无法获取，则用 Gemma-4 生成有代表性的合成样本。
+  3. 将所有数据缓存在 data/，方便复现实验。
 """
 from __future__ import annotations
 
@@ -25,7 +23,7 @@ from synsynth_io import write_json, read_json
 random.seed(RANDOM_SEED)
 
 # ============================================================================
-#  Utilitaires
+#  辅助函数
 # ============================================================================
 
 def _cache_path(name: str) -> str:
@@ -46,7 +44,7 @@ def _save_cache(name: str, data: Any):
 
 
 # ============================================================================
-#  1.  Extraction de Relations (DocRED / TACRED)
+#  1.  关系抽取（DocRED / TACRED）
 # ============================================================================
 
 _RELATION_TYPES = [
@@ -73,11 +71,11 @@ _ENTITY_PAIRS = [
 
 
 def _generate_extraction_samples_synthetic(n: int) -> list[dict]:
-    """Fabrique des exemples phrase-level d'extraction de relations."""
+    """生成句子级关系抽取样本。"""
     from synsynth_model import generate_structured
 
     samples: list[dict] = []
-    # D'abord, les exemples factuels codés en dur
+    # 先使用代码中预置的事实样本
     templates = [
         ("{head} a été fondée par {tail}.", "founded_by"),
         ("Le siège de {head} est à {tail}.", "headquarters_location"),
@@ -99,7 +97,7 @@ def _generate_extraction_samples_synthetic(n: int) -> list[dict]:
             "relation": rel,
         })
 
-    # Compléter avec le modèle
+    # 再用模型补充样本
     if len(samples) < n:
         prompt = (
             "Génère exactement {k} exemples d'extraction de relations "
@@ -120,7 +118,7 @@ def _generate_extraction_samples_synthetic(n: int) -> list[dict]:
 
 
 def _try_load_hf_extraction(n: int) -> list[dict] | None:
-    """Tente de charger Re-DocRED depuis HuggingFace (format Parquet)."""
+    """尝试从 Hugging Face 加载 Parquet 格式的 Re-DocRED。"""
     try:
         from datasets import load_dataset
         ds = load_dataset(
@@ -169,7 +167,7 @@ def load_extraction_data(n: int = NUM_EXTRACTION_SAMPLES) -> list[dict]:
 
 
 # ============================================================================
-#  2.  WebQuestionsSP — Text-to-Query
+#  2.  WebQuestionsSP：文本到查询
 # ============================================================================
 
 _WEBQ_EXAMPLES = [
@@ -188,21 +186,21 @@ _WEBQ_EXAMPLES = [
     {"question": "Dans quel pays se trouve le Machu Picchu ?",
      "answer": "Pérou",
      "cypher": "MATCH (l:Landmark {name:'Machu Picchu'})-[:LOCATED_IN]->(c) RETURN c.name"},
-    # --- Questions temporelles ---
+    # --- 时间类问题 ---
     {"question": "En quelle année la Première Guerre mondiale a-t-elle commencé ?",
      "answer": "1914",
      "cypher": "MATCH (e:Event {name:'Première Guerre mondiale'}) RETURN e.start_year"},
     {"question": "Quand a été fondée l'Organisation des Nations unies ?",
      "answer": "1945",
      "cypher": "MATCH (o:Organization {name:'ONU'}) RETURN o.founded_year"},
-    # --- Questions numériques ---
+    # --- 数值类问题 ---
     {"question": "Quelle est la superficie de l'Australie ?",
      "answer": "7,69 millions de km²",
      "cypher": "MATCH (c:Country {name:'Australie'}) RETURN c.area_km2"},
     {"question": "Combien d'habitants compte l'Inde ?",
      "answer": "1,4 milliard",
      "cypher": "MATCH (c:Country {name:'Inde'}) RETURN c.population"},
-    # --- Questions relationnelles ---
+    # --- 关系类问题 ---
     {"question": "Qui est le réalisateur du film Inception ?",
      "answer": "Christopher Nolan",
      "cypher": "MATCH (f:Film {name:'Inception'})-[:DIRECTED_BY]->(p) RETURN p.name"},
@@ -212,7 +210,7 @@ _WEBQ_EXAMPLES = [
     {"question": "Quelle est la monnaie du Japon ?",
      "answer": "Yen",
      "cypher": "MATCH (c:Country {name:'Japon'})-[:HAS_CURRENCY]->(m) RETURN m.name"},
-    # --- Questions géographiques ---
+    # --- 地理类问题 ---
     {"question": "Quel est le plus long fleuve d'Afrique ?",
      "answer": "Le Nil",
      "cypher": "MATCH (r:River)-[:LOCATED_IN]->(cont:Continent {name:'Afrique'}) RETURN r.name ORDER BY r.length DESC LIMIT 1"},
@@ -222,7 +220,7 @@ _WEBQ_EXAMPLES = [
     {"question": "Quel est le plus haut sommet du monde ?",
      "answer": "L'Everest",
      "cypher": "MATCH (m:Mountain) RETURN m.name ORDER BY m.elevation DESC LIMIT 1"},
-    # --- Questions scientifiques ---
+    # --- 科学类问题 ---
     {"question": "Quel est le symbole chimique de l'or ?",
      "answer": "Au",
      "cypher": "MATCH (e:Element {name:'Or'}) RETURN e.symbol"},
@@ -232,7 +230,7 @@ _WEBQ_EXAMPLES = [
     {"question": "Qui a formulé la théorie de la relativité ?",
      "answer": "Albert Einstein",
      "cypher": "MATCH (t:Theory {name:'Relativité'})-[:FORMULATED_BY]->(p) RETURN p.name"},
-    # --- Questions institutionnelles ---
+    # --- 机构类问题 ---
     {"question": "Quel pays a le plus grand nombre de Prix Nobel de littérature ?",
      "answer": "La France",
      "cypher": "MATCH (p:Person)-[:WON]->(n:NobelPrize {category:'Littérature'}), (p)-[:CITIZEN_OF]->(c:Country) RETURN c.name, count(*) ORDER BY count(*) DESC LIMIT 1"},
@@ -250,11 +248,11 @@ def load_query_data(n: int = NUM_QUERY_SAMPLES) -> list[dict]:
     from synsynth_model import generate_structured
 
     samples = list(_WEBQ_EXAMPLES)
-    # Boucle de génération pour atteindre n échantillons
+    # 持续生成，直到达到 n 个样本
     max_consecutive_failures = 5
     consecutive_failures = 0
     while len(samples) < n:
-        batch_k = min(n - len(samples), 30)  # 30 par batch pour fiabilité JSON
+        batch_k = min(n - len(samples), 30)  # 每批最多 30 个，减少 JSON 格式错误
         prompt = (
             "Génère exactement {k} questions de type base de connaissances avec pour chaque "
             "question : question (français), answer (texte court), "
@@ -265,7 +263,7 @@ def load_query_data(n: int = NUM_QUERY_SAMPLES) -> list[dict]:
         raw = generate_structured(prompt, json_mode=True, max_new_tokens=4096)
         try:
             extra = json.loads(raw) if isinstance(raw, str) else raw
-            # Unwrap dict-wrapped lists (e.g. {"questions": [...]})
+            # 解包字典包裹的列表，例如 {"questions": [...]}
             if isinstance(extra, dict):
                 for v in extra.values():
                     if isinstance(v, list):
@@ -295,7 +293,7 @@ def load_query_data(n: int = NUM_QUERY_SAMPLES) -> list[dict]:
 
 
 # ============================================================================
-#  3.  HotpotQA — Raisonnement multi-hop
+#  3.  HotpotQA：多跳推理
 # ============================================================================
 
 _HOTPOT_EXAMPLES = [
@@ -387,7 +385,7 @@ def load_multihop_data(n: int = NUM_MULTIHOP_SAMPLES) -> list[dict]:
 
 
 # ============================================================================
-#  4.  RAG / Faithfulness (RAGAS-style)
+#  4.  RAG 与忠实度（RAGAS 风格）
 # ============================================================================
 
 _RAG_EXAMPLES = [
@@ -471,7 +469,7 @@ def load_rag_data(n: int = NUM_RAG_SAMPLES) -> list[dict]:
     from synsynth_model import generate_structured
     samples = list(_RAG_EXAMPLES)
 
-    # Boucle de génération pour atteindre n échantillons
+    # 持续生成，直到达到 n 个样本
     max_consecutive_failures = 5
     consecutive_failures = 0
     while len(samples) < n:
@@ -486,7 +484,7 @@ def load_rag_data(n: int = NUM_RAG_SAMPLES) -> list[dict]:
         raw = generate_structured(prompt, json_mode=True, max_new_tokens=4096)
         try:
             extra = json.loads(raw)
-            # Unwrap dict-wrapped lists (e.g. {"examples": [...]})
+            # 解包字典包裹的列表，例如 {"examples": [...]}
             if isinstance(extra, dict):
                 for v in extra.values():
                     if isinstance(v, list):

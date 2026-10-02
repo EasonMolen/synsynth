@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-Suggestion C — Clustering automatique de la matrice de confusion.
+建议 C：对混淆矩阵自动聚类。
 
-Construit la matrice de confusion pred×gold à partir des résultats d'extraction,
-applique un clustering spectral, et compare les clusters automatiques aux
-25 groupes de synonymes définis manuellement.
+根据关系抽取结果构建预测值与标准值的混淆矩阵，
+执行谱聚类，并将自动聚类结果与手工定义的 25 个同义词组比较。
 
-Usage :
+用法：
     python confusion_clustering.py [--results path/to/extraction.json]
 """
 from __future__ import annotations
@@ -27,7 +26,7 @@ from synsynth_config import RESULTS_DIR, logger, safe_path
 OUTPUT_DIR = safe_path("results", "confusion_analysis")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ── Groupes de synonymes manuels (référence) ───────────────────────────
+# ── 手工定义的同义词组，用作参考 ─────────────────────────────────────
 MANUAL_SYNONYM_GROUPS = {
     "start_time": {"year", "date", "start", "start_date", "began", "beginning", "from"},
     "end_time": {"year", "date", "end", "end_date", "ended", "until", "to"},
@@ -63,7 +62,7 @@ MANUAL_SYNONYM_GROUPS = {
     "jurisdiction": {"is_part_of", "part_of", "residence"},
 }
 
-# Labels Wikidata → texte (copié de exp_extraction.py pour autonomie)
+# Wikidata 标签到文本的映射；从 exp_extraction.py 复制以便独立运行
 _WIKIDATA_LABELS = {}
 
 
@@ -73,7 +72,7 @@ def _normalize(s: str) -> str:
 
 
 def load_confusion_data(results_paths: list[str]) -> list[dict]:
-    """Charge les (pred_rel, gold_label) depuis un ou plusieurs fichiers."""
+    """从一个或多个文件加载（预测关系、标准标签）数据。"""
     pairs = []
     for path in results_paths:
         with open(path) as f:
@@ -90,11 +89,11 @@ def load_confusion_data(results_paths: list[str]) -> list[dict]:
 
 
 def build_confusion_matrix(pairs: list[dict]) -> tuple[np.ndarray, list[str], list[str]]:
-    """Construit la matrice de confusion normalisée C[gold, pred]."""
+    """构建归一化混淆矩阵 C[标准值, 预测值]。"""
     gold_counts = Counter(p["gold"] for p in pairs)
     pred_counts = Counter(p["pred"] for p in pairs)
 
-    # Labels : tous les gold + tous les pred apparaissant >= 3 fois
+    # 标签包括全部标准值以及出现至少三次的预测值
     all_labels = sorted(set(
         [g for g, c in gold_counts.items() if c >= 2] +
         [p for p, c in pred_counts.items() if c >= 3]
@@ -109,7 +108,7 @@ def build_confusion_matrix(pairs: list[dict]) -> tuple[np.ndarray, list[str], li
         if gi is not None and pi is not None:
             C[gi, pi] += 1
 
-    # Normaliser par ligne (P(pred|gold))
+    # 按行归一化，得到 P(预测值|标准值)
     row_sums = C.sum(axis=1, keepdims=True)
     row_sums[row_sums == 0] = 1
     C_norm = C / row_sums
@@ -120,15 +119,15 @@ def build_confusion_matrix(pairs: list[dict]) -> tuple[np.ndarray, list[str], li
 
 def spectral_clustering_on_confusion(C_norm: np.ndarray, labels: list[str],
                                       n_clusters: int | None = None) -> dict:
-    """Clustering spectral sur la matrice de confusion symétrisée."""
+    """对对称化后的混淆矩阵执行谱聚类。"""
     from sklearn.cluster import SpectralClustering
     from sklearn.metrics import silhouette_score
 
-    # Symétrisée : similarité = C + C^T (confusion bidirectionnelle)
+    # 对称化：相似度 = C + C 的转置，表示双向混淆
     S = (C_norm + C_norm.T) / 2
-    np.fill_diagonal(S, 0)  # Ignorer l'auto-confusion
+    np.fill_diagonal(S, 0)  # 忽略标签自身的混淆值
 
-    # Si n_clusters non spécifié, chercher le meilleur k
+    # 未指定聚类数时，搜索最佳 k 值
     if n_clusters is None:
         best_k, best_score = 2, -1
         for k in range(2, min(20, len(labels))):
@@ -150,7 +149,7 @@ def spectral_clustering_on_confusion(C_norm: np.ndarray, labels: list[str],
                             random_state=42, n_init=10)
     cluster_labels = sc.fit_predict(S + 1e-10)
 
-    # Construire les groupes
+    # 构建聚类分组
     groups = defaultdict(list)
     for label, cl in zip(labels, cluster_labels):
         groups[int(cl)].append(label)
@@ -165,11 +164,11 @@ def spectral_clustering_on_confusion(C_norm: np.ndarray, labels: list[str],
 
 def hierarchical_clustering_on_confusion(C_norm: np.ndarray, labels: list[str],
                                           distance_threshold: float = 0.7) -> dict:
-    """Clustering hiérarchique agglomératif sur la matrice de confusion."""
+    """对混淆矩阵执行凝聚层次聚类。"""
     from sklearn.cluster import AgglomerativeClustering
     from scipy.spatial.distance import squareform
 
-    # Distance = 1 - similarité
+    # 距离 = 1 - 相似度
     S = (C_norm + C_norm.T) / 2
     np.fill_diagonal(S, 1)
     D = 1 - S
@@ -188,7 +187,7 @@ def hierarchical_clustering_on_confusion(C_norm: np.ndarray, labels: list[str],
     for label, cl in zip(labels, cluster_labels):
         groups[int(cl)].append(label)
 
-    # Filtrer les singletons
+    # 过滤只含一个元素的分组
     non_singleton = {k: v for k, v in groups.items() if len(v) >= 2}
 
     return {
@@ -201,8 +200,8 @@ def hierarchical_clustering_on_confusion(C_norm: np.ndarray, labels: list[str],
 
 
 def compare_with_manual(auto_clusters: dict[int, list[str]]) -> dict:
-    """Compare les clusters automatiques aux groupes manuels."""
-    # Pour chaque cluster auto, trouver le groupe manuel le plus proche (Jaccard)
+    """比较自动聚类结果与手工分组。"""
+    # 根据 Jaccard 相似度为每个自动分组找出最接近的手工分组
     matches = []
     manual_groups_flat = []
     for gold_key, syns in MANUAL_SYNONYM_GROUPS.items():
@@ -237,11 +236,11 @@ def compare_with_manual(auto_clusters: dict[int, list[str]]) -> dict:
 
 
 def evaluate_with_auto_synonyms(pairs: list[dict], auto_clusters: dict[int, list[str]]) -> dict:
-    """Évalue F1 en utilisant les clusters automatiques comme synonymes.
+    """将自动聚类分组用作同义词组来评估 F1。
 
-    Compare : match exact vs match manuel vs match automatique.
+    比较完全匹配、手工同义词匹配和自动分组匹配。
     """
-    # Construire un lookup : pour chaque label, quels autres labels sont dans le même cluster
+    # 建立查询表：记录每个标签在同一分组中的其他标签
     label_to_synonyms_auto = defaultdict(set)
     for members in auto_clusters.values():
         for m in members:
@@ -258,14 +257,14 @@ def evaluate_with_auto_synonyms(pairs: list[dict], auto_clusters: dict[int, list
     for p in pairs:
         pred, gold = p["pred"], p["gold"]
 
-        # Exact match
+        # 完全匹配
         if pred == gold:
             results["exact"]["tp"] += 1
         else:
             results["exact"]["fp"] += 1
             results["exact"]["fn"] += 1
 
-        # Manual synonym match
+        # 手工同义词匹配
         manual_syns = label_to_synonyms_manual.get(gold, set())
         if pred == gold or pred in manual_syns:
             results["manual_synonyms"]["tp"] += 1
@@ -273,7 +272,7 @@ def evaluate_with_auto_synonyms(pairs: list[dict], auto_clusters: dict[int, list
             results["manual_synonyms"]["fp"] += 1
             results["manual_synonyms"]["fn"] += 1
 
-        # Auto synonym match
+        # 自动分组匹配
         auto_syns = label_to_synonyms_auto.get(gold, set())
         if pred == gold or pred in auto_syns:
             results["auto_synonyms"]["tp"] += 1
@@ -281,7 +280,7 @@ def evaluate_with_auto_synonyms(pairs: list[dict], auto_clusters: dict[int, list
             results["auto_synonyms"]["fp"] += 1
             results["auto_synonyms"]["fn"] += 1
 
-    # Calculer F1
+    # 计算 F1
     for method in results:
         m = results[method]
         prec = m["tp"] / (m["tp"] + m["fp"]) if (m["tp"] + m["fp"]) > 0 else 0
@@ -296,12 +295,12 @@ def evaluate_with_auto_synonyms(pairs: list[dict], auto_clusters: dict[int, list
 
 def plot_confusion_heatmap(C_norm: np.ndarray, labels: list[str],
                             top_n: int = 30, label: str = "extraction"):
-    """Heatmap de la matrice de confusion (top-N labels par fréquence)."""
+    """绘制混淆矩阵热力图，显示出现频率最高的 N 个标签。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    # Sélectionner les top-N labels par activité (somme ligne + colonne)
+    # 根据行列之和选择最活跃的 N 个标签
     activity = C_norm.sum(axis=0) + C_norm.sum(axis=1)
     top_idx = np.argsort(-activity)[:top_n]
     C_sub = C_norm[np.ix_(top_idx, top_idx)]
@@ -327,7 +326,7 @@ def plot_confusion_heatmap(C_norm: np.ndarray, labels: list[str],
 
 
 def plot_dendrogram(C_norm: np.ndarray, labels: list[str], label: str = "extraction"):
-    """Dendrogramme du clustering hiérarchique."""
+    """绘制层次聚类树状图。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -339,7 +338,7 @@ def plot_dendrogram(C_norm: np.ndarray, labels: list[str], label: str = "extract
     D = np.clip(1 - S, 0, None)
     np.fill_diagonal(D, 0)
 
-    # Filtrer pour n'avoir que les labels actifs
+    # 只保留实际出现的标签
     activity = C_norm.sum(axis=0) + C_norm.sum(axis=1)
     active = activity > 0.01
     D_sub = D[np.ix_(active, active)]
@@ -368,7 +367,7 @@ def plot_dendrogram(C_norm: np.ndarray, labels: list[str], label: str = "extract
 
 
 def analyze(results_paths: list[str], label: str = "all") -> dict:
-    """Analyse complète : matrice, clustering, comparaison, évaluation."""
+    """执行完整分析：混淆矩阵、聚类、比较和评估。"""
     pairs = load_confusion_data(results_paths)
     if len(pairs) < 20:
         logger.error("Pas assez de données de confusion (%d).", len(pairs))
@@ -376,25 +375,25 @@ def analyze(results_paths: list[str], label: str = "all") -> dict:
 
     C_norm, row_labels, col_labels = build_confusion_matrix(pairs)
 
-    # Clustering spectral
+    # 谱聚类
     spectral = spectral_clustering_on_confusion(C_norm, row_labels)
     logger.info("Spectral clustering : %d clusters, silhouette=%.3f",
                 spectral["n_clusters"], spectral["silhouette"])
 
-    # Clustering hiérarchique
+    # 层次聚类
     hierarchical = hierarchical_clustering_on_confusion(C_norm, row_labels)
     logger.info("Hierarchical clustering : %d clusters (%d non-singleton)",
                 hierarchical["n_clusters"], hierarchical["n_non_singleton"])
 
-    # Comparaison avec les groupes manuels
+    # 与手工分组比较
     comparison_spectral = compare_with_manual(spectral["clusters"])
     comparison_hier = compare_with_manual(hierarchical.get("non_singleton_clusters", {}))
 
-    # Évaluation F1 avec matching par clusters automatiques
+    # 使用自动聚类匹配结果评估 F1
     eval_spectral = evaluate_with_auto_synonyms(pairs, spectral["clusters"])
     eval_hier = evaluate_with_auto_synonyms(pairs, hierarchical.get("non_singleton_clusters", {}))
 
-    # Figures
+    # 绘图
     fig_heatmap = plot_confusion_heatmap(C_norm, row_labels, label=label)
     fig_dendro = plot_dendrogram(C_norm, row_labels, label=label)
 
@@ -431,7 +430,7 @@ def main():
     args = parser.parse_args()
 
     if args.results is None:
-        # Charger tous les résultats d'extraction disponibles
+        # 加载所有可用的关系抽取结果
         args.results = []
         for fname in ["extraction.json", "extraction_qlora.json"]:
             p = os.path.join(RESULTS_DIR, fname)

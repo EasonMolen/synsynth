@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
-Reconstruction des données d'entraînement multihop avec des chaînes de
-raisonnement construites à partir des supporting_facts gold de HotpotQA.
+利用 HotpotQA 的标准支持事实，重建包含推理链的多跳训练数据。
 
-Problème corrigé :
-    Les données V1 contenaient 100% de chaînes dégénérées :
+修复的问题：
+    V1 数据中的推理链全部退化为：
         {"reasoning_chain": ["D'après les faits fournis"], "answer": "..."}
-    Le modèle Phi-4 qui les a générées n'a produit aucun raisonnement réel.
+    生成这些数据的 Phi-4 模型没有输出真正的推理过程。
 
-Solution :
-    On exploite les supporting_facts gold de HotpotQA pour construire des
-    chaînes de raisonnement template à 2-3 étapes, sans recourir à un LLM.
+解决方法：
+    根据 HotpotQA 的标准支持事实，用模板构建两到三步推理链，
+    无需调用大语言模型。
 
-Usage :
+用法：
     python scripts/rebuild_multihop_data.py
     python scripts/rebuild_multihop_data.py --max-samples 5000
 """
@@ -41,26 +40,26 @@ MULTIHOP_SYSTEM = (
     '{"reasoning_chain": ["...", "..."], "answer": "réponse courte"}'
 )
 
-# Nombre de points pour la courbe d'apprentissage
+# 学习曲线的数据点数量
 CURVE_POINTS = [10, 50, 200, 500, 1000, 3000]
 
 
 def extract_supporting_sentences(example: dict) -> list[tuple[str, str]]:
-    """Extrait les phrases de support gold de HotpotQA.
+    """提取 HotpotQA 中的标准支持句。
 
-    Renvoie une liste de (title, sentence_text) triées par ordre d'apparition.
+    按出现顺序返回（标题、句子文本）列表。
     """
     titles = example.get("context", {}).get("title", [])
     sentences = example.get("context", {}).get("sentences", [])
     sf_titles = example.get("supporting_facts", {}).get("title", [])
     sf_sent_ids = example.get("supporting_facts", {}).get("sent_id", [])
 
-    # Index title -> sentences
+    # 建立标题到句子列表的索引
     title_to_sents = {}
     for t, s in zip(titles, sentences):
         title_to_sents[t] = s
 
-    # Extraire les phrases de support
+    # 提取支持句
     support_pairs = []
     seen = set()
     for sf_title, sf_idx in zip(sf_titles, sf_sent_ids):
@@ -81,21 +80,21 @@ def build_reasoning_chain(
     answer: str,
     q_type: str,
 ) -> list[str]:
-    """Construit une chaîne de raisonnement à partir des faits de support gold.
+    """根据标准支持事实构建推理链。
 
-    Produit 2-4 étapes selon le nombre de faits et le type de question.
+    根据事实数量和问题类型，生成两到四个步骤。
     """
     if not support_pairs:
         return [f"La réponse à la question est {answer}."]
 
     chain = []
 
-    # Étape(s) factuelle(s) : une par fait de support
+    # 事实步骤：每条支持事实对应一步
     for i, (title, sent) in enumerate(support_pairs):
         sent_clean = sent.strip().rstrip(".")
         chain.append(f"D'après l'article « {title} » : {sent_clean}.")
 
-    # Étape de synthèse
+    # 归纳步骤
     if q_type == "comparison" and len(support_pairs) >= 2:
         t1 = support_pairs[0][0]
         t2 = support_pairs[1][0]
@@ -115,9 +114,9 @@ def build_reasoning_chain(
 
 
 def format_multihop_sample_v2(example: dict) -> dict | None:
-    """Formate un exemple HotpotQA en sample chat avec chaîne de raisonnement.
+    """将 HotpotQA 样本格式化为包含推理链的对话样本。
 
-    Version 2 : utilise les supporting_facts gold au lieu d'un placeholder.
+    V2 使用标准支持事实替换占位文本。
     """
     question = example.get("question", "")
     answer = example.get("answer", "")
@@ -126,18 +125,18 @@ def format_multihop_sample_v2(example: dict) -> dict | None:
     if not question or not answer:
         return None
 
-    # Contexte complet (tous les paragraphes, comme en V1)
+    # 保留完整上下文（与 V1 一样，包含全部段落）
     titles = example.get("context", {}).get("title", [])
     sentences = example.get("context", {}).get("sentences", [])
     context_parts = []
     for title, sents in zip(titles, sentences):
         context_parts.append(f"{title}: {' '.join(sents)}")
-    context = "\n".join(context_parts)  # Tous les paragraphes (gold + distractors)
+    context = "\n".join(context_parts)  # 全部段落，包括标准事实和干扰内容
 
     if not context:
         return None
 
-    # Chaîne de raisonnement à partir des supporting_facts gold
+    # 根据标准支持事实构建推理链
     support_pairs = extract_supporting_sentences(example)
     reasoning_chain = build_reasoning_chain(support_pairs, question, answer, q_type)
 
@@ -157,7 +156,7 @@ def format_multihop_sample_v2(example: dict) -> dict | None:
 
 
 def rebuild_multihop_data(max_samples: int = 3000, seed: int = RANDOM_SEED):
-    """Reconstruit les données multihop V2 avec chaînes de raisonnement gold."""
+    """用标准支持事实的推理链重建 V2 多跳数据。"""
     try:
         from datasets import load_dataset
     except ImportError:
@@ -168,13 +167,13 @@ def rebuild_multihop_data(max_samples: int = 3000, seed: int = RANDOM_SEED):
     ds = load_dataset("hotpot_qa", "distractor", split="train", cache_dir=HF_CACHE)
     logger.info("HotpotQA train : %d questions.", len(ds))
 
-    # Formater tous les exemples
+    # 格式化全部样本
     all_samples = []
     chain_lengths = []
     for ex in ds:
         sample = format_multihop_sample_v2(ex)
         if sample:
-            # Compter la longueur de chaîne pour stats
+            # 统计推理链长度
             parsed = json.loads(sample["messages"][2]["content"])
             chain_lengths.append(len(parsed["reasoning_chain"]))
             all_samples.append(sample)
@@ -189,9 +188,9 @@ def rebuild_multihop_data(max_samples: int = 3000, seed: int = RANDOM_SEED):
         max(chain_lengths),
     )
 
-    # Sauvegarder le fichier principal
-    # Nommé multihop_v2_train.jsonl pour compatibilité avec learning_curve.py
-    # qui cherche {task}_train.jsonl → task="multihop_v2"
+    # 保存主数据文件。
+    # 命名为 multihop_v2_train.jsonl，以匹配 learning_curve.py
+    # 查找的 {task}_train.jsonl 模式，其中 task="multihop_v2"。
     os.makedirs(QLORA_DATA_DIR, exist_ok=True)
     out_path = os.path.join(QLORA_DATA_DIR, "multihop_v2_train.jsonl")
     with open(out_path, "w") as f:
@@ -199,7 +198,7 @@ def rebuild_multihop_data(max_samples: int = 3000, seed: int = RANDOM_SEED):
             f.write(json.dumps(sample, ensure_ascii=False) + "\n")
     logger.info("Sauvegardé : %s (%d lignes)", out_path, len(all_samples))
 
-    # Créer les sous-échantillons pour la courbe d'apprentissage
+    # 为学习曲线创建不同大小的子样本集
     rng = random.Random(seed)
     for n in CURVE_POINTS:
         if n > len(all_samples):
@@ -210,7 +209,7 @@ def rebuild_multihop_data(max_samples: int = 3000, seed: int = RANDOM_SEED):
         with open(sub_path, "w") as f:
             for sample in sub:
                 f.write(json.dumps(sample, ensure_ascii=False) + "\n")
-        # Stats de chaîne pour ce sous-échantillon
+        # 统计该子样本集中的推理链
         sub_chains = [
             len(json.loads(s["messages"][2]["content"])["reasoning_chain"])
             for s in sub
@@ -220,7 +219,7 @@ def rebuild_multihop_data(max_samples: int = 3000, seed: int = RANDOM_SEED):
             sub_path, n, sum(sub_chains) / len(sub_chains),
         )
 
-    # Afficher un exemple
+    # 展示一个样本
     ex = all_samples[0]
     parsed = json.loads(ex["messages"][2]["content"])
     logger.info("\n=== Exemple V2 ===")
@@ -228,7 +227,7 @@ def rebuild_multihop_data(max_samples: int = 3000, seed: int = RANDOM_SEED):
     logger.info("Chaîne   : %s", parsed["reasoning_chain"])
     logger.info("Réponse  : %s", parsed["answer"])
 
-    # Comparer avec V1
+    # 与 V1 比较
     v1_path = os.path.join(QLORA_DATA_DIR, "multihop_train.jsonl")
     if os.path.exists(v1_path):
         with open(v1_path) as f:
@@ -240,7 +239,7 @@ def rebuild_multihop_data(max_samples: int = 3000, seed: int = RANDOM_SEED):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# V3 — Chaînes concises + contexte réduit (2 gold + 3 distracteurs)
+# V3：精简推理链与上下文（2 条标准事实、3 条干扰信息）
 # ═══════════════════════════════════════════════════════════════════════
 
 def build_reasoning_chain_v3(
@@ -248,19 +247,19 @@ def build_reasoning_chain_v3(
     answer: str,
     q_type: str,
 ) -> list[str]:
-    """Chaîne de raisonnement concise : fait-clé résumé, pas de citation verbatim."""
+    """生成简短推理链：归纳关键事实，不逐字引用。"""
     if not support_pairs:
         return [f"Réponse : {answer}."]
 
     chain = []
     for title, sent in support_pairs:
-        # Tronquer les phrases longues à ~100 chars
+        # 将过长句子截断到约 100 个字符
         s = sent.strip().rstrip(".")
         if len(s) > 120:
             s = s[:117] + "..."
         chain.append(f"{title} : {s}.")
 
-    # Synthèse
+    # 归纳
     if q_type == "comparison" and len(support_pairs) >= 2:
         chain.append(f"Comparaison → {answer}.")
     elif len(support_pairs) >= 2:
@@ -272,9 +271,9 @@ def build_reasoning_chain_v3(
 
 
 def format_multihop_sample_v3(example: dict) -> dict | None:
-    """V3 : contexte réduit (2 gold + 3 distracteurs) + chaînes concises.
+    """V3：精简上下文（2 条标准事实、3 条干扰信息）和推理链。
 
-    Cible : < 1024 tokens total par sample.
+    目标是每个样本总长度少于 1024 个令牌。
     """
     question = example.get("question", "")
     answer = example.get("answer", "")
@@ -287,7 +286,7 @@ def format_multihop_sample_v3(example: dict) -> dict | None:
     sentences = example.get("context", {}).get("sentences", [])
     sf_titles_set = set(example.get("supporting_facts", {}).get("title", []))
 
-    # Séparer paragraphes gold et distracteurs
+    # 区分标准事实段落与干扰段落
     gold_parts = []
     distractor_parts = []
     for title, sents in zip(titles, sentences):
@@ -297,7 +296,7 @@ def format_multihop_sample_v3(example: dict) -> dict | None:
         else:
             distractor_parts.append(para)
 
-    # Garder les 2 paragraphes gold + max 3 distracteurs, mélangés
+    # 保留两个标准事实段落和最多三个干扰段落，并打乱顺序
     selected = gold_parts + distractor_parts[:3]
     random.shuffle(selected)
     context = "\n".join(selected)
@@ -324,7 +323,7 @@ def format_multihop_sample_v3(example: dict) -> dict | None:
 
 
 def rebuild_multihop_data_v3(max_samples: int = 3000, seed: int = RANDOM_SEED):
-    """Reconstruit données multihop V3 : concises et dans le budget tokens."""
+    """重建简短且符合令牌预算的 V3 多跳数据。"""
     try:
         from datasets import load_dataset
     except ImportError:
@@ -382,7 +381,7 @@ def rebuild_multihop_data_v3(max_samples: int = 3000, seed: int = RANDOM_SEED):
             sub_path, n, sum(sub_chains) / len(sub_chains),
         )
 
-    # Exemple
+    # 示例
     ex = all_samples[0]
     parsed = json.loads(ex["messages"][2]["content"])
     logger.info("\n=== Exemple V3 ===")
@@ -392,13 +391,13 @@ def rebuild_multihop_data_v3(max_samples: int = 3000, seed: int = RANDOM_SEED):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# V4 — Format aligné sur l'évaluation (exp_multihop.py)
-#   Fix 1 : system prompt identique (avec les 2 exemples few-shot)
-#   Fix 2 : user prompt = Question → Faits de support (bullet) → instruction
-#   Fix 3 : contexte réduit (2 gold + 3 distracteurs) comme V3
+# V4：训练格式与 exp_multihop.py 的评估格式一致
+#   修正 1：使用相同的系统提示词（含两个少样本示例）
+#   修正 2：用户提示词按问题、支持事实列表、指令的顺序组织
+#   修正 3：与 V3 一样缩减上下文（2 条标准事实、3 条干扰信息）
 # ═══════════════════════════════════════════════════════════════════════
 
-# System prompt identique à exp_multihop.py SYSTEM_PROMPT
+# 系统提示词与 exp_multihop.py 中的 SYSTEM_PROMPT 一致
 MULTIHOP_SYSTEM_V4 = (
     "Tu es un agent de raisonnement multi-hop. "
     "Tu reçois une question complexe et des faits de support. "
@@ -422,12 +421,12 @@ MULTIHOP_SYSTEM_V4 = (
 
 
 def format_multihop_sample_v4(example: dict) -> dict | None:
-    """V4 : format aligné sur exp_multihop.py (system prompt + user prompt).
+    """V4：与 exp_multihop.py 的系统提示词及用户提示词格式一致。
 
-    - System prompt = SYSTEM_PROMPT de exp_multihop.py (avec exemples few-shot)
-    - User prompt = Question → Faits de support (bullets) → instruction
-    - Contexte réduit = 2 gold + 3 distracteurs (comme V3)
-    - Chaînes concises (comme V3)
+    - 系统提示词：使用 exp_multihop.py 的 SYSTEM_PROMPT（含少样本示例）。
+    - 用户提示词：问题、支持事实列表、指令。
+    - 精简上下文：2 条标准事实、3 条干扰信息（同 V3）。
+    - 精简推理链（同 V3）。
     """
     question = example.get("question", "")
     answer = example.get("answer", "")
@@ -440,11 +439,11 @@ def format_multihop_sample_v4(example: dict) -> dict | None:
     sentences = example.get("context", {}).get("sentences", [])
     sf_titles_set = set(example.get("supporting_facts", {}).get("title", []))
 
-    # Séparer paragraphes gold et distracteurs
+    # 区分标准事实段落与干扰段落
     gold_parts = []
     distractor_parts = []
     for title, sents in zip(titles, sentences):
-        # Chaque phrase comme un fait séparé (format bullet, comme l'éval)
+        # 每个句子作为独立事实，以列表格式呈现，与评估时一致
         for s in sents:
             s = s.strip()
             if not s:
@@ -454,20 +453,20 @@ def format_multihop_sample_v4(example: dict) -> dict | None:
             else:
                 distractor_parts.append(s)
 
-    # Garder toutes les phrases gold + max 10 phrases distracteurs
+    # 保留全部标准事实句和最多十个干扰句
     selected = gold_parts + distractor_parts[:10]
     random.shuffle(selected)
 
     if not selected:
         return None
 
-    # Format identique à exp_multihop.py: bullet points
+    # 使用与 exp_multihop.py 相同的项目列表格式
     facts = "\n".join(f"- {s}" for s in selected)
 
     support_pairs = extract_supporting_sentences(example)
     reasoning_chain = build_reasoning_chain_v3(support_pairs, answer, q_type)
 
-    # Format identique à exp_multihop.py: Question → Faits → instruction
+    # 按 exp_multihop.py 的格式组织：问题、事实、指令
     user_prompt = (
         f"Question : {question}\n\n"
         f"Faits de support :\n{facts}\n\n"
@@ -489,7 +488,7 @@ def format_multihop_sample_v4(example: dict) -> dict | None:
 
 
 def rebuild_multihop_data_v4(max_samples: int = 3000, seed: int = RANDOM_SEED):
-    """Reconstruit données multihop V4 : format aligné sur l'évaluation."""
+    """重建与评估输入格式一致的 V4 多跳数据。"""
     try:
         from datasets import load_dataset
     except ImportError:
@@ -547,7 +546,7 @@ def rebuild_multihop_data_v4(max_samples: int = 3000, seed: int = RANDOM_SEED):
             sub_path, n, sum(sub_chains) / len(sub_chains),
         )
 
-    # Exemple
+    # 示例
     ex = all_samples[0]
     parsed = json.loads(ex["messages"][2]["content"])
     logger.info("\n=== Exemple V4 ===")

@@ -1,12 +1,9 @@
 """
-Expérience 3 — Raisonnement multi-hop (HotpotQA style).
+实验 3：多跳推理（HotpotQA 风格）。
 
-Le modèle reçoit une question complexe et des faits de support.
-Il doit raisonner en enchaînant les informations (multi-hop) pour
-produire la bonne réponse.
+模型接收复杂问题及支持事实，串联多个信息点进行推理并给出答案。
 
-On mesure : Accuracy exacte, Accuracy partielle, et le score
-de chaîne de raisonnement.
+评估完全匹配准确率、部分匹配准确率和推理链得分。
 """
 from __future__ import annotations
 
@@ -48,8 +45,8 @@ def _normalize(s: str) -> str:
 
 
 def _extract_short_answer(text: str) -> str:
-    """Tente d'extraire une réponse courte depuis un texte verbeux."""
-    # Chercher après des marqueurs comme 'answer:', 'réponse:', 'final answer:'
+    """尝试从冗长文本中提取简短答案。"""
+    # 查找 answer、réponse、final answer 等标签后面的内容
     for pat in [r'(?:final\s+)?answer\s*(?:is|:)\s*(.+)',
                 r'réponse\s*(?:finale)?\s*(?:est|:)\s*(.+)',
                 r'(?:therefore|thus|so)\s*,?\s*(.+)']:
@@ -65,7 +62,7 @@ def _answer_match(pred: str, gold: str) -> bool:
     p, g = _normalize(pred), _normalize(gold)
     if p == g or g in p or p in g:
         return True
-    # Extraire une réponse courte si la prédiction est verbeuse
+    # 如果预测过长，则提取简短答案
     short = _normalize(_extract_short_answer(pred))
     if short != p and (g in short or short in g or short == g):
         return True
@@ -73,21 +70,21 @@ def _answer_match(pred: str, gold: str) -> bool:
 
 
 def _strip_markdown(raw: str) -> str:
-    """Retire les blocs ```json...``` qui entourent la réponse."""
+    """移除回答外层的 ```json...``` 代码块。"""
     m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw, re.DOTALL)
     return m.group(1).strip() if m else raw
 
 
 def _parse_response(raw: str) -> dict | None:
     cleaned = _strip_markdown(raw)
-    # Essayer json.loads sur la chaîne entière
+    # 先尝试解析完整字符串
     try:
         obj = json.loads(cleaned)
         if isinstance(obj, dict) and "answer" in obj:
             return obj
     except (json.JSONDecodeError, ValueError):
         pass
-    # Parser à profondeur d'accolades pour trouver le JSON le plus externe
+    # 根据花括号嵌套层级找出最外层 JSON
     depth = 0
     start = None
     for i, c in enumerate(cleaned):
@@ -106,22 +103,22 @@ def _parse_response(raw: str) -> dict | None:
                 except (json.JSONDecodeError, ValueError):
                     pass
                 start = None
-    # Fallback regex : extraire "answer" depuis un JSON malformé
+    # JSON 格式错误时，用正则提取 answer 字段
     m = re.search(r'"answer"\s*:\s*"([^"]*)"', cleaned)
     if m:
         answer = m.group(1).strip()
-        # Tenter aussi d'extraire la chaîne de raisonnement
+        # 同时尝试提取推理链
         chain_match = re.findall(r'"reasoning_chain"\s*:\s*\[(.*?)\]', cleaned, re.DOTALL)
         chain = []
         if chain_match:
             chain = re.findall(r'"([^"]+)"', chain_match[0])
         return {"answer": answer, "reasoning_chain": chain}
-    # Fallback : extraire la réponse du texte brut
+    # 最后从纯文本中提取答案
     answer = _extract_short_answer(cleaned) if cleaned else raw.strip()
     return {"answer": answer, "reasoning_chain": []}
 
 
-# ── Point d'entrée ─────────────────────────────────────────────────────────
+# ── 程序入口 ────────────────────────────────────────────────────────────
 
 def run(n_samples: int | None = None) -> dict[str, Any]:
     data = load_multihop_data(n_samples) if n_samples else load_multihop_data()
@@ -129,7 +126,7 @@ def run(n_samples: int | None = None) -> dict[str, Any]:
         "=== Exp 3 : Raisonnement multi-hop — %d échantillons ===", len(data),
     )
 
-    # ── Reprise depuis checkpoint ──────────────────────────────────────
+    # ── 从检查点继续 ────────────────────────────────────────────────
     ckpt = load_checkpoint("multihop")
     if ckpt:
         start_idx = ckpt["next_idx"]
@@ -159,7 +156,7 @@ def run(n_samples: int | None = None) -> dict[str, Any]:
         raw = generate_structured(prompt, system=SYSTEM_PROMPT, json_mode=True, max_new_tokens=1024)
         pred = _parse_response(raw)
 
-        # Re-ranking : si la réponse est trop longue, relancer une synthèse
+        # 重新排序：答案过长时再次请求模型归纳
         if pred and len(str(pred["answer"])) > 100:
             rerank_prompt = (
                 f"Question : {sample['question']}\n"
@@ -178,7 +175,7 @@ def run(n_samples: int | None = None) -> dict[str, Any]:
         chain_len = len(chain) if isinstance(chain, list) else 0
         chain_lengths.append(chain_len)
 
-        # Partial : au moins un mot significatif (4+ chars) de la gold answer
+        # 部分匹配：至少包含标准答案中一个长度超过三字符的关键词
         partial_ok = False
         if pred:
             gold_words = {w for w in _normalize(sample["answer"]).split() if len(w) >= 4}
@@ -186,7 +183,7 @@ def run(n_samples: int | None = None) -> dict[str, Any]:
             if gold_words:
                 partial_ok = bool(gold_words & pred_words)
             else:
-                # Gold très court : fallback sur match simple
+                # 标准答案很短时退回简单匹配
                 partial_ok = _normalize(sample["answer"]) in _normalize(pred["answer"])
 
         if ans_ok:

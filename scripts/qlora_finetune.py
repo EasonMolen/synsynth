@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """
-QLoRA fine-tuning module for SYNSYNTH+ (Phase 2b).
+SYNSYNTH+ 的 QLoRA 微调模块（阶段 2b）。
 
-Fine-tunes un LLM (défaut : Qwen2.5-7B-Instruct) avec QLoRA 4-bit
-sur des données supervisées, pour servir de borne supérieure face au
-pipeline zero-shot.
+使用监督数据和 4 位 QLoRA 微调大语言模型
+（默认 Qwen2.5-7B-Instruct），作为零样本流程的性能参照。
 
-Tâches supportées :
-  - extraction : Re-DocRED relation extraction
-  - multihop   : HotpotQA multi-hop reasoning
+支持的任务：
+  - extraction：Re-DocRED 关系抽取
+  - multihop：HotpotQA 多跳推理
 
-Usage autonome :
+独立运行：
     python qlora_finetune.py --task extraction
     python qlora_finetune.py --task multihop
     python qlora_finetune.py --task all
 
-Usage intégré au pipeline :
+通过主流程运行：
     python run_synsynth.py --qlora --gbnf --seed 42
 """
 from __future__ import annotations
 
 import gc
+import importlib
 import json
 import os
 import sys
@@ -32,10 +32,10 @@ from synsynth_config import (
     RANDOM_SEED, TEMPERATURE, TOP_P, logger, safe_path,
 )
 
-# ── Tâches supportant le QLoRA ──────────────────────────────────────────
+# ── 支持 QLoRA 的任务 ────────────────────────────────────────────────
 QLORA_TASKS = ["extraction", "multihop"]
 
-# ── Modèle de base (ouvert, pas d'authentification HF requise) ──────────
+# ── 基础模型，公开可用，无需 Hugging Face 身份验证 ──────────────────
 DEFAULT_BASE_MODEL = "Qwen/Qwen2.5-7B-Instruct"
 
 QLORA_BASE_MODELS: dict[str, str] = {
@@ -43,23 +43,23 @@ QLORA_BASE_MODELS: dict[str, str] = {
     "multihop":   DEFAULT_BASE_MODEL,
 }
 
-# ── Hyper-paramètres LoRA ───────────────────────────────────────────────
+# ── LoRA 超参数 ───────────────────────────────────────────────────────
 LORA_R              = 16
 LORA_ALPHA          = 32
 LORA_DROPOUT        = 0.05
 LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj"]
 
-# ── Hyper-paramètres d'entraînement ────────────────────────────────────
+# ── 训练超参数 ────────────────────────────────────────────────────────
 LEARNING_RATE         = 2e-4
 NUM_EPOCHS            = 3
 PER_DEVICE_BATCH_SIZE = 2
-GRADIENT_ACCUMULATION = 8        # effective batch = 16
+GRADIENT_ACCUMULATION = 8        # 有效批量大小为 16
 MAX_SEQ_LENGTH        = 2048
 WARMUP_RATIO          = 0.03
 WEIGHT_DECAY          = 0.01
 MAX_TRAIN_SAMPLES     = 3000
 
-# ── Chemins ─────────────────────────────────────────────────────────────
+# ── 路径 ──────────────────────────────────────────────────────────────
 QLORA_DATA_DIR   = safe_path("data", "qlora")
 QLORA_MODELS_DIR = safe_path("models", "qlora")
 HF_CACHE         = safe_path("cache", "huggingface")
@@ -69,22 +69,25 @@ for _d in (QLORA_DATA_DIR, QLORA_MODELS_DIR, HF_CACHE):
 
 
 # ====================================================================
-#  Préparation des données (délègue à PJKG5)
+#  准备数据（调用外部 PJKG5 项目）
 # ====================================================================
 
 def prepare_qlora_data(task: str) -> str:
-    """Prépare les données d'entraînement JSONL.  Renvoie le chemin."""
+    """准备 JSONL 训练数据并返回文件路径。"""
     pjkg5 = os.path.join(os.path.dirname(WORKSPACE_ROOT), "PJKG5")
+    data_module_path = os.path.join(pjkg5, "prepare_qlora_data.py")
+    if not os.path.isfile(data_module_path):
+        raise FileNotFoundError(
+            f"QLoRA 数据准备需要外部文件 {data_module_path}。"
+        )
     if pjkg5 not in sys.path:
         sys.path.insert(0, pjkg5)
 
-    from prepare_qlora_data import (
-        load_redocred_for_qlora, load_hotpotqa_for_qlora, write_jsonl,
-    )
+    prepare_data = importlib.import_module("prepare_qlora_data")
 
     output_path = os.path.join(QLORA_DATA_DIR, f"{task}_train.jsonl")
 
-    # Réutiliser le fichier existant s'il a assez de samples
+    # 如果已有文件中的样本足够，则直接复用
     if os.path.exists(output_path):
         with open(output_path) as f:
             n = sum(1 for _ in f)
@@ -93,22 +96,22 @@ def prepare_qlora_data(task: str) -> str:
             return output_path
 
     if task == "extraction":
-        samples = load_redocred_for_qlora(MAX_TRAIN_SAMPLES, HF_CACHE)
+        samples = prepare_data.load_redocred_for_qlora(MAX_TRAIN_SAMPLES, HF_CACHE)
     elif task == "multihop":
-        samples = load_hotpotqa_for_qlora(MAX_TRAIN_SAMPLES, HF_CACHE)
+        samples = prepare_data.load_hotpotqa_for_qlora(MAX_TRAIN_SAMPLES, HF_CACHE)
     else:
         raise ValueError(f"QLoRA non supporté pour la tâche : {task}")
 
-    write_jsonl(samples, output_path)
+    prepare_data.write_jsonl(samples, output_path)
     return output_path
 
 
 # ====================================================================
-#  Entraînement QLoRA
+#  QLoRA 训练
 # ====================================================================
 
 def has_finetuned_model(task: str) -> bool:
-    """Vérifie si un adaptateur fine-tuné existe pour la tâche."""
+    """检查该任务是否已有微调后的适配器。"""
     adapter_dir = os.path.join(QLORA_MODELS_DIR, task, "adapter")
     return os.path.isfile(os.path.join(adapter_dir, "adapter_config.json"))
 
@@ -119,7 +122,7 @@ def finetune(
     num_epochs: int = NUM_EPOCHS,
     learning_rate: float = LEARNING_RATE,
 ) -> str:
-    """Fine-tune avec QLoRA.  Renvoie le chemin du répertoire adaptateur."""
+    """使用 QLoRA 微调并返回适配器目录。"""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     from peft import LoraConfig
@@ -139,7 +142,7 @@ def finetune(
     logger.info("QLoRA fine-tuning : tâche=%s, modèle=%s", task, base_model)
     logger.info("=" * 60)
 
-    # 1. Charger les données
+    # 1. 加载数据
     data_path = prepare_qlora_data(task)
     samples = []
     with open(data_path, encoding="utf-8") as f:
@@ -148,14 +151,14 @@ def finetune(
     dataset = Dataset.from_list(samples)
     logger.info("Données : %d samples depuis %s", len(dataset), data_path)
 
-    # 2. Tokenizer
+    # 2. 加载分词器
     tokenizer = AutoTokenizer.from_pretrained(
         base_model, cache_dir=HF_CACHE, trust_remote_code=True,
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # 3. Quantification 4-bit (NF4)
+    # 3. 进行 4 位量化（NF4）
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -163,7 +166,7 @@ def finetune(
         bnb_4bit_use_double_quant=True,
     )
 
-    # 4. Charger le modèle de base
+    # 4. 加载基础模型
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
         quantization_config=bnb_config,
@@ -175,7 +178,7 @@ def finetune(
     )
     model.config.use_cache = False
 
-    # 5. Configuration LoRA
+    # 5. 配置 LoRA
     lora_config = LoraConfig(
         r=LORA_R,
         lora_alpha=LORA_ALPHA,
@@ -185,7 +188,7 @@ def finetune(
         task_type="CAUSAL_LM",
     )
 
-    # 6. Pré-formater le dataset (chat template → texte brut)
+    # 6. 预处理数据集：将对话模板转换为纯文本
     def _apply_template(example):
         text = tokenizer.apply_chat_template(
             example["messages"], tokenize=False, add_generation_prompt=False,
@@ -194,7 +197,7 @@ def finetune(
 
     dataset = dataset.map(_apply_template, remove_columns=["messages"])
 
-    # 7. Configuration SFT
+    # 7. 配置监督微调
     ckpt_dir = os.path.join(QLORA_MODELS_DIR, task, "checkpoints")
     training_args = SFTConfig(
         output_dir=ckpt_dir,
@@ -217,7 +220,7 @@ def finetune(
         gradient_checkpointing_kwargs={"use_reentrant": False},
     )
 
-    # 8. Trainer
+    # 8. 创建训练器
     trainer = SFTTrainer(
         model=model,
         train_dataset=dataset,
@@ -225,14 +228,14 @@ def finetune(
         args=training_args,
     )
 
-    # 9. Entraînement
+    # 9. 开始训练
     t0 = time.time()
     logger.info("Début de l'entraînement QLoRA (%d epochs, lr=%.0e)...", num_epochs, learning_rate)
     trainer.train()
     elapsed = time.time() - t0
     logger.info("Entraînement terminé en %.0f s.", elapsed)
 
-    # 10. Sauvegarder l'adaptateur + métadonnées
+    # 10. 保存适配器和元数据
     os.makedirs(adapter_dir, exist_ok=True)
     trainer.save_model(adapter_dir)
     tokenizer.save_pretrained(adapter_dir)
@@ -250,7 +253,7 @@ def finetune(
         }, f, indent=2)
     logger.info("Adaptateur sauvegardé → %s", adapter_dir)
 
-    # Libérer la VRAM
+    # 释放显存
     del trainer, model
     gc.collect()
     torch.cuda.empty_cache()
@@ -259,7 +262,7 @@ def finetune(
 
 
 # ====================================================================
-#  Inférence HuggingFace (patch de synsynth_model)
+#  使用 Hugging Face 推理（运行时替换 synsynth_model）
 # ====================================================================
 
 _qlora_model = None
@@ -269,7 +272,7 @@ _original_generate_structured = None
 
 
 def _unload_ollama_models():
-    """Décharge tous les modèles Ollama de la VRAM pour libérer la mémoire GPU."""
+    """从显存卸载所有 Ollama 模型，为 GPU 腾出空间。"""
     import urllib.request
     try:
         req = urllib.request.Request("http://localhost:11434/api/ps")
@@ -301,12 +304,12 @@ def _unload_ollama_models():
 
 
 def load_finetuned_model(task: str):
-    """Charge le modèle de base + adaptateur QLoRA pour l'inférence."""
+    """加载基础模型及 QLoRA 适配器，用于推理。"""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     from peft import PeftModel
 
-    # Libérer la VRAM occupée par Ollama avant de charger le modèle QLoRA
+    # 加载 QLoRA 模型前先释放 Ollama 占用的显存
     _unload_ollama_models()
 
     adapter_dir = os.path.join(QLORA_MODELS_DIR, task, "adapter")
@@ -353,7 +356,7 @@ def _hf_generate(
     top_p: float = TOP_P,
     json_format: bool = False,
 ) -> str:
-    """Génération via le modèle QLoRA chargé (HuggingFace)."""
+    """使用已加载的 Hugging Face QLoRA 模型生成回答。"""
     import torch
 
     messages = []
@@ -397,7 +400,7 @@ def _hf_generate_structured(
     json_mode: bool = False,
     max_new_tokens: int = 4096,
 ) -> str:
-    """Génération structurée via le modèle QLoRA (HuggingFace)."""
+    """使用 Hugging Face QLoRA 模型生成结构化回答。"""
     if json_mode:
         system = (system + "\n" if system else "") + (
             "Tu dois répondre UNIQUEMENT avec un objet JSON valide, "
@@ -413,7 +416,7 @@ def _hf_generate_structured(
 
 
 def patch_inference(task: str):
-    """Monkey-patch synsynth_model pour utiliser le modèle QLoRA."""
+    """运行时替换 synsynth_model 的推理函数，改用 QLoRA 模型。"""
     global _qlora_model, _qlora_tokenizer
     global _original_generate, _original_generate_structured
 
@@ -430,7 +433,7 @@ def patch_inference(task: str):
 
 
 def unpatch_inference():
-    """Restaure l'inférence Ollama et libère la VRAM."""
+    """恢复 Ollama 推理函数并释放显存。"""
     global _qlora_model, _qlora_tokenizer
     global _original_generate, _original_generate_structured
 
@@ -458,7 +461,7 @@ def unpatch_inference():
 
 
 # ====================================================================
-#  CLI (usage autonome)
+#  命令行入口（独立运行）
 # ====================================================================
 
 def main():

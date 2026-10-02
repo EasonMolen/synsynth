@@ -1,7 +1,7 @@
 """
-Visualisation des résultats expérimentaux.
+实验结果可视化。
 
-Génère des graphiques récapitulatifs sauvegardés dans results/.
+生成汇总图表并保存到 results/。
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from synsynth_config import RESULTS_DIR, safe_path, logger
 
 
 def plot_summary(all_results: dict[str, Any]) -> list[str]:
-    """Crée les figures récapitulatives. Renvoie la liste des chemins générés."""
+    """创建汇总图表，返回生成文件的路径列表。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -20,11 +20,11 @@ def plot_summary(all_results: dict[str, Any]) -> list[str]:
 
     paths: list[str] = []
 
-    # ── Figure 1 : Métriques principales par expérience ────────────────
+    # ── 图 1：各实验的主要指标 ──────────────────────────────────────
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle("SYNSYNTH+ — Résultats Expérimentaux", fontsize=16, weight="bold")
 
-    # 1a. Extraction
+    # 1a. 关系抽取
     ext = all_results.get("extraction", {})
     ax = axes[0, 0]
     metrics = ["precision", "recall", "f1_score"]
@@ -40,7 +40,7 @@ def plot_summary(all_results: dict[str, Any]) -> list[str]:
         ax.text(bar.get_x() + bar.get_width() / 2, v + 0.02,
                 f"{v:.2%}", ha="center", fontsize=10)
 
-    # 1b. Text-to-Query
+    # 1b. 文本到查询
     qtq = all_results.get("text_to_query", {})
     ax = axes[0, 1]
     vals = [qtq.get("accuracy", 0), qtq.get("cypher_syntax_valid_rate", 0)]
@@ -54,7 +54,7 @@ def plot_summary(all_results: dict[str, Any]) -> list[str]:
         ax.text(bar.get_x() + bar.get_width() / 2, v + 0.02,
                 f"{v:.2%}", ha="center", fontsize=10)
 
-    # 1c. Multi-hop
+    # 1c. 多跳推理
     mh = all_results.get("multihop_reasoning", {})
     ax = axes[1, 0]
     vals = [mh.get("exact_accuracy", 0), mh.get("partial_accuracy", 0)]
@@ -90,7 +90,7 @@ def plot_summary(all_results: dict[str, Any]) -> list[str]:
     paths.append(p)
     logger.info("Figure résumé → %s", p)
 
-    # ── Figure 2 : Radar chart des 4 axes ──────────────────────────────
+    # ── 图 2：四个评估方向的雷达图 ─────────────────────────────────
     fig2, ax2 = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
     categories = ["Extraction\n(F1)", "Query\n(Accuracy)",
                    "Multi-hop\n(Exact)", "Faithfulness\n(RAGAS)"]
